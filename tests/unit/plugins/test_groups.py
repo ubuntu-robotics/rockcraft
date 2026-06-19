@@ -20,13 +20,15 @@ import pytest
 from craft_parts.plugins.dotnet_plugin import DotnetPlugin as DotnetPluginV1
 from craft_parts.plugins.dotnet_v2_plugin import DotnetV2Plugin as DotnetPluginV2
 from craft_parts.plugins.python_v2.python_plugin import PythonPlugin as PythonPluginV2
+from rockcraft.plugins.colcon_plugin import ColconPlugin
 from rockcraft.plugins.groups import get_plugin_group
 from rockcraft.plugins.poetry_plugin import PoetryPlugin as PoetryPluginV1
 from rockcraft.plugins.python_plugin import PythonPlugin as PythonPluginV1
 from rockcraft.plugins.uv_plugin import UvPlugin as UvPluginV1
 
 LEGACY_BASES = ["ubuntu@20.04", "ubuntu@22.04", "ubuntu@24.04"]
-DEFAULT_BASES = ["ubuntu@25.10", "devel", "ubuntu@devel"]
+DEFAULT_BASES = ["ubuntu@25.10", "ubuntu@26.04", "devel", "ubuntu@devel"]
+ALL_BASES = LEGACY_BASES + DEFAULT_BASES
 
 
 @pytest.mark.parametrize("legacy_base", LEGACY_BASES)
@@ -56,3 +58,9 @@ def test_default_python(base):
     # No v2 of the poetry and uv plugins yet
     assert "poetry" not in group
     assert "uv" not in group
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+def test_colcon_registered(base):
+    group = get_plugin_group(base)
+    assert group["colcon"] is ColconPlugin

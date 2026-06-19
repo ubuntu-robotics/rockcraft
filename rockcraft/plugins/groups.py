@@ -39,6 +39,7 @@ from craft_parts.plugins.qmake_plugin import QmakePlugin
 from craft_parts.plugins.rust_plugin import RustPlugin
 from craft_parts.plugins.scons_plugin import SConsPlugin
 
+from .colcon_plugin import ColconPlugin
 from .register import get_plugins as get_rockcraft_plugins
 
 
@@ -63,6 +64,7 @@ _ROCKCRAFT_DEFAULT: dict[str, type[Plugin]] = {
     "autotools": AutotoolsPlugin,
     "cargo-use": CargoUsePlugin,
     "cmake": CMakePlugin,
+    "colcon": ColconPlugin,
     "dump": DumpPlugin,
     "go": GoPlugin,
     "go-use": GoUsePlugin,
