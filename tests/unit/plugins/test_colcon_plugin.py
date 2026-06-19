@@ -185,6 +185,25 @@ def test_get_build_commands_runs_rosdep(base, tmp_path):
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_rosdep_update_runs_once(base, tmp_path):
+    # rosdep update hits the network, so it must only run when the rosdep cache
+    # has not been populated yet (it is shared across parts under $ROS_HOME).
+    plugin = create_plugin(base, tmp_path)
+
+    commands = plugin.get_build_commands()
+
+    rosdep_update = next(
+        i for i, line in enumerate(commands) if line.startswith("rosdep update")
+    )
+    # The line immediately preceding `rosdep update` guards on an empty cache.
+    guard = commands[rosdep_update - 1]
+    assert guard.startswith("if [ -z ")
+    assert "rosdep/sources.cache" in guard
+    # The guard is closed with `fi` right after the update.
+    assert commands[rosdep_update + 1] == "fi"
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
 def test_get_build_commands_rosdep_guarded_on_ros_distro(base, tmp_path):
     # The whole rosdep block must be guarded on ROS_DISTRO being set.
     plugin = create_plugin(base, tmp_path)
@@ -245,7 +264,61 @@ def test_get_build_commands_runtime_staging_guarded_on_ros_distro(base, tmp_path
         i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
     )
     assert commands[stage_index - 1] == 'if [ -n "${ROS_DISTRO:-}" ]; then'
-    assert commands[stage_index + 1] == "fi"
+    # The staging command is followed by the BLAS/LAPACK symlink fix, then an
+    # else branch warning, then `fi`.
+    else_index = next(
+        i
+        for i, line in enumerate(commands[stage_index:], stage_index)
+        if line == "else"
+    )
+    assert commands[else_index + 2] == "fi"
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_restores_blas_lapack_symlinks(base, tmp_path):
+    # The runtime staging block recreates the BLAS/LAPACK SONAME symlinks that
+    # update-alternatives would normally create, since staging packages does not
+    # run maintainer scripts.
+    plugin = create_plugin(base, tmp_path)
+
+    commands = plugin.get_build_commands()
+
+    stage_index = next(
+        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
+    )
+    symlink_index = next(
+        i for i, line in enumerate(commands) if "Restoring BLAS/LAPACK" in line
+    )
+    # The symlink fix runs after the runtime dependencies are staged.
+    assert symlink_index > stage_index
+    # The provider dirs (blas/, lapack/) are iterated and a relative SONAME
+    # symlink is created in the parent (default linker) directory.
+    assert "for _prov in blas lapack; do" in commands
+    assert any(
+        'ln -s "${_prov}/$(basename "${_so}")" "${_dest}"' in line for line in commands
+    )
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_warns_when_ros_distro_unset(base, tmp_path):
+    # When ROS_DISTRO is unset, both rosdep blocks must emit a visible warning
+    # instead of silently skipping dependency resolution.
+    plugin = create_plugin(base, tmp_path)
+
+    commands = plugin.get_build_commands()
+
+    warnings = [
+        line
+        for line in commands
+        if "WARNING: ROS_DISTRO is not set" in line and line.startswith("echo ")
+    ]
+    # One warning for the build-dependency block, one for the runtime-staging
+    # block.
+    assert len(warnings) == 2
+    assert any("build dependency installation" in line for line in warnings)
+    assert any("runtime dependency staging" in line for line in warnings)
+    # Each warning is written to stderr.
+    assert all(line.rstrip().endswith(">&2") for line in warnings)
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
