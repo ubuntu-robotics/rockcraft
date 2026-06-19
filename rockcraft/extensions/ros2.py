@@ -22,7 +22,7 @@ from typing import Any
 from craft_cli import emit
 from typing_extensions import override
 
-from .extension import Extension
+from .extension import Extension, get_extensions_data_dir
 
 _ROS2_APT_KEY_ID = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
 _ROS2_APT_URL = "http://packages.ros.org/ros2/ubuntu"
@@ -101,8 +101,32 @@ class _ROS2Base(Extension):
 
     @override
     def get_parts_snippet(self) -> dict[str, Any]:
-        """Return additional parts to add — none for ROS 2 extensions."""
-        return {}
+        """Return the launcher part for the ROS 2 workspace.
+
+        Injects a ``ros2-launch`` wrapper script (installed to
+        ``/usr/bin/ros2-launch``) that sources the ROS 2 underlay and extends
+        ``AMENT_PREFIX_PATH`` with the rock root before exec-ing the user
+        command. This mirrors the ``command-chain`` launcher mechanism used by
+        the equivalent snapcraft extensions.
+
+        The part is named ``ros2-{distro}-launch`` (snapcraft uses a
+        ``ros2-{distro}/ros2-launch`` slash-namespace, which rockcraft does not
+        support).
+        """
+        return {
+            f"ros2-{self.distro}-launch": {
+                "plugin": "dump",
+                "source": str(get_extensions_data_dir() / "ros2"),
+                "organize": {"ros2-launch": "usr/bin/ros2-launch"},
+                "stage": ["usr/bin/ros2-launch"],
+                # libblas3/liblapack3 are undeclared runtime deps of rclpy on
+                # all ROS 2 distros: rosidl_generator_py generates Python
+                # message bindings that import numpy, which links against
+                # BLAS/LAPACK.  These are absent from every package.xml so
+                # rosdep cannot resolve them automatically.
+                # "stage-packages": ["libblas3", "liblapack3"],
+            },
+        }
 
 
 class ROS2HumbleExtension(_ROS2Base):

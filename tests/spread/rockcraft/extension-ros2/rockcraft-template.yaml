@@ -11,8 +11,16 @@ description: |
 license: GPL-3.0
 platforms:
   amd64:
+  arm64:
 
 extensions: [ros2-@DISTRO@]
+
+services:
+  talker-listener:
+    override: replace
+    startup: enabled
+    command: ros2-launch ros2 launch demo_nodes_cpp talker_listener_launch.yaml
+    on-failure: shutdown
 
 parts:
   demo-nodes:
@@ -20,6 +28,5 @@ parts:
     source: https://github.com/ros2/demos.git
     source-branch: "@DISTRO@"
     colcon-packages: [demo_nodes_cpp]
-    # The build-time and runtime dependencies declared in the package.xml files
-    # are installed and staged automatically by rosdep, so they don't need to be
-    # listed here in build-packages or stage-packages.
+    stage-packages:
+      - ros-@DISTRO@-ros2launch
