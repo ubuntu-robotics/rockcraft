@@ -3,6 +3,9 @@ name = "rockcraft"
 description = "Create rocks"
 dynamic = ["version"]
 dependencies = [
+  # catkin-pkg is used by the colcon plugin to parse ROS 2 package.xml files
+  # when staging runtime dependencies with rosdep.
+  "catkin-pkg>=1.0.0",
   # To use a dev version of a craft library:
   # craft-lib @ git+https://github.com/canonical/craft-lib@ref
   "craft-application>=7.3.0",
