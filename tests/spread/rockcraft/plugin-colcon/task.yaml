@@ -26,7 +26,8 @@ prepare: |
 
 execute: |
   SCENARIO="plugin-colcon"
-  ROCK_FILE="${SCENARIO}_0.1_amd64.rock"
+  ARCH=$(dpkg --print-architecture)
+  ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
   IMAGE="${SCENARIO}:0.1"
 
   # Build the rock & load it into docker
@@ -36,16 +37,23 @@ execute: |
   rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
   rm ${ROCK_FILE}
 
-  # Run the colcon-built talker for a few seconds. Sourcing the ROS environment
-  # makes the staged ROS 2 runtime libraries available, and the colcon workspace
-  # libraries live in /lib at the root of the rock.
-  output=$(docker run --rm "${IMAGE}" exec bash -c \
-    "source /opt/ros/${DISTRO}/setup.sh && \
-     export LD_LIBRARY_PATH=/lib:\${LD_LIBRARY_PATH:-} && \
-     timeout 5 /lib/demo_nodes_cpp/talker" 2>&1 || true)
+  # Start a detached container running pebble, then bring up the talker and
+  # listener services.  They communicate over DDS on the local network
+  # namespace and need no ROS Python stack.
+  docker run -d --name "${SCENARIO}" "${IMAGE}"
+  docker exec "${SCENARIO}" pebble start talker listener
 
+  # Give the nodes a moment to discover each other and exchange messages.
+  sleep 5
+
+  output=$(docker exec "${SCENARIO}" pebble logs talker listener 2>&1)
   echo "${output}"
+
+  # Verify the talker published and the listener received at least one message.
   echo "${output}" | MATCH "Publishing: 'Hello World:"
+  echo "${output}" | MATCH "I heard: \[Hello World:"
 
 restore: |
+  docker stop "${SCENARIO}" 2>/dev/null || true
+  docker rm "${SCENARIO}" 2>/dev/null || true
   rm -f rockcraft.yaml

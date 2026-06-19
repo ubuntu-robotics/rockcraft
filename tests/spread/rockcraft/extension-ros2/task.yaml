@@ -25,7 +25,8 @@ prepare: |
 
 execute: |
   SCENARIO="extension-ros2"
-  ROCK_FILE="${SCENARIO}_0.1_amd64.rock"
+  ARCH=$(dpkg --print-architecture)
+  ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
   IMAGE="${SCENARIO}:0.1"
 
   # Build the rock & load it into docker
@@ -35,14 +36,21 @@ execute: |
   rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
   rm ${ROCK_FILE}
 
-  # Run the colcon-built talker for a few seconds and verify output.
-  output=$(docker run --rm "${IMAGE}" exec bash -c \
-    "source /opt/ros/${DISTRO}/setup.sh && \
-     export LD_LIBRARY_PATH=/lib:\${LD_LIBRARY_PATH:-} && \
-     timeout 5 /lib/demo_nodes_cpp/talker" 2>&1 || true)
+  # Start the rock — pebble launches the talker-listener service automatically
+  # (startup: enabled) via the ros2-launch wrapper injected by the extension.
+  docker run -d --name "${SCENARIO}" "${IMAGE}"
 
+  # Give the launch file time to bring up both nodes and exchange messages.
+  sleep 5
+
+  output=$(docker exec "${SCENARIO}" pebble logs talker-listener 2>&1)
   echo "${output}"
+
+  # Verify the talker published and the listener received at least one message.
   echo "${output}" | MATCH "Publishing: 'Hello World:"
+  echo "${output}" | MATCH "I heard: \[Hello World:"
 
 restore: |
+  docker stop "${SCENARIO}" 2>/dev/null || true
+  docker rm "${SCENARIO}" 2>/dev/null || true
   rm -f rockcraft.yaml
