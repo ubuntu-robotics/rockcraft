@@ -20,6 +20,7 @@ import craft_parts
 from craft_parts.plugins.plugins import PluginType
 
 from .ant_plugin import AntPlugin
+from .colcon_plugin import ColconPlugin
 from .maven_plugin import MavenPlugin
 from .python_common import get_python_plugins
 
@@ -33,5 +34,6 @@ def get_plugins(base: str | None) -> dict[str, PluginType]:
     """Get a dict of Rockcraft-specific plugins for a given base."""
     return {
         "ant": AntPlugin,
+        "colcon": ColconPlugin,
         "maven": MavenPlugin,
     } | get_python_plugins(base)

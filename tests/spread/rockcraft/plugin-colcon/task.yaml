@@ -1,0 +1,51 @@
+summary: colcon plugin test (ROS 2 talker)
+
+# ROS 2 packages are only published for specific Ubuntu releases, so each
+# variant pairs an Ubuntu base with its matching ROS 2 distribution:
+#   - ROS 2 Humble   -> ubuntu@22.04 (jammy)
+#   - ROS 2 Jazzy    -> ubuntu@24.04 (noble)
+#   - ROS 2 Lyrical  -> ubuntu@26.04 (resolute)
+environment:
+  DISTRO/humble_2204: humble
+  BASE/humble_2204: ubuntu@22.04
+  SUITE/humble_2204: jammy
+
+  DISTRO/jazzy_2404: jazzy
+  BASE/jazzy_2404: ubuntu@24.04
+  SUITE/jazzy_2404: noble
+
+  DISTRO/lyrical_2604: lyrical
+  BASE/lyrical_2604: ubuntu@26.04
+  SUITE/lyrical_2604: resolute
+
+prepare: |
+  sed -e "s/@DISTRO@/${DISTRO}/g" \
+      -e "s|@BASE@|${BASE}|g" \
+      -e "s/@SUITE@/${SUITE}/g" \
+      rockcraft-template.yaml > rockcraft.yaml
+
+execute: |
+  SCENARIO="plugin-colcon"
+  ROCK_FILE="${SCENARIO}_0.1_amd64.rock"
+  IMAGE="${SCENARIO}:0.1"
+
+  # Build the rock & load it into docker
+  run_rockcraft pack
+  echo expecting ${ROCK_FILE}
+  test -f ${ROCK_FILE}
+  rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
+  rm ${ROCK_FILE}
+
+  # Run the colcon-built talker for a few seconds. Sourcing the ROS environment
+  # makes the staged ROS 2 runtime libraries available, and the colcon workspace
+  # libraries live in /lib at the root of the rock.
+  output=$(docker run --rm "${IMAGE}" exec bash -c \
+    "source /opt/ros/${DISTRO}/setup.sh && \
+     export LD_LIBRARY_PATH=/lib:\${LD_LIBRARY_PATH:-} && \
+     timeout 5 /lib/demo_nodes_cpp/talker" 2>&1 || true)
+
+  echo "${output}"
+  echo "${output}" | MATCH "Publishing: 'Hello World:"
+
+restore: |
+  rm -f rockcraft.yaml
