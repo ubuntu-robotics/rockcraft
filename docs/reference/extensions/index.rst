@@ -20,3 +20,6 @@ initiating a new rock.
     go-framework
     express-framework
     spring-boot-framework
+    ros2-humble
+    ros2-jazzy
+    ros2-lyrical

@@ -1,0 +1,25 @@
+name: extension-ros2
+base: "@BASE@"
+build-base: "@BASE@"
+
+version: "0.1"
+summary: A ROS 2 rock built with the ros2-@DISTRO@ extension.
+description: |
+  Demonstrates the ros2-@DISTRO@ Rockcraft extension, which automatically
+  configures the ROS 2 apt repository and injects ROS_DISTRO into the
+  build environment.
+license: GPL-3.0
+platforms:
+  amd64:
+
+extensions: [ros2-@DISTRO@]
+
+parts:
+  demo-nodes:
+    plugin: colcon
+    source: https://github.com/ros2/demos.git
+    source-branch: "@DISTRO@"
+    colcon-packages: [demo_nodes_cpp]
+    # The build-time and runtime dependencies declared in the package.xml files
+    # are installed and staged automatically by rosdep, so they don't need to be
+    # listed here in build-packages or stage-packages.
