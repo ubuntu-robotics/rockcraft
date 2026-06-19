@@ -1,0 +1,39 @@
+name: plugin-colcon
+base: "@BASE@"
+build-base: "@BASE@"
+
+version: "0.1"
+summary: A ROS 2 rock that builds the demo_nodes_cpp talker with colcon.
+description: A ROS 2 rock that builds the demo_nodes_cpp talker with colcon.
+license: GPL-3.0
+platforms:
+  amd64:
+
+package-repositories:
+  - type: apt
+    url: http://packages.ros.org/ros2/ubuntu
+    components: [main]
+    suites: ["@SUITE@"]
+    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+
+parts:
+  demo-nodes:
+    plugin: colcon
+    source: https://github.com/ros2/demos.git
+    source-branch: "@DISTRO@"
+    colcon-packages: [demo_nodes_cpp]
+    build-environment:
+      - ROS_DISTRO: "@DISTRO@"
+    build-packages:
+      - ros-@DISTRO@-ament-cmake
+      - ros-@DISTRO@-rclcpp
+      - ros-@DISTRO@-rclcpp-components
+      - ros-@DISTRO@-std-msgs
+      - ros-@DISTRO@-example-interfaces
+      - ros-@DISTRO@-rosidl-default-generators
+    stage-packages:
+      - ros-@DISTRO@-rclcpp
+      - ros-@DISTRO@-rclcpp-components
+      - ros-@DISTRO@-std-msgs
+      - ros-@DISTRO@-example-interfaces
+      - ros-@DISTRO@-rmw-fastrtps-cpp
