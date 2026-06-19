@@ -100,12 +100,19 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
         return [
             "##[rockcraft.colcon] Installing build dependencies with rosdep",
             'if [ -n "${ROS_DISTRO:-}" ]; then',
-            # rosdep must be initialized once; `rosdep init` creates the default
-            # sources list, which is shared system-wide.
+            # rosdep must be initialized once.
             "if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then",
             "rosdep init",
             "fi",
+            # `rosdep update` downloads the rosdistro index over the network,
+            # which is slow and a CI fragility point (it fails offline or when
+            # the index is flaky). The cache lives under $ROS_HOME and is shared
+            # across parts, so only refresh it when it has not been populated
+            # yet. Delete the cache to force a refresh.
+            'if [ -z "$(ls -A "${ROS_HOME:-${HOME}/.ros}/rosdep/sources.cache" '
+            '2>/dev/null)" ]; then',
             'rosdep update --include-eol-distros --rosdistro "${ROS_DISTRO}"',
+            "fi",
             # Resolve and install only the build-time dependencies declared in
             # the package.xml files found under the part's source directory.
             "rosdep install"
@@ -117,6 +124,8 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             " --dependency-types=build_export"
             ' --rosdistro "${ROS_DISTRO}"'
             ' --from-paths "${CRAFT_PART_SRC_WORK}"',
+            "else",
+            self._get_no_ros_distro_warning("build dependency installation"),
             "fi",
             "",
         ]
@@ -197,6 +206,50 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             "##[rockcraft.colcon] Staging runtime dependencies with rosdep",
             'if [ -n "${ROS_DISTRO:-}" ]; then',
             stage_command,
+            *self._get_fix_library_alternatives_commands(),
+            "else",
+            self._get_no_ros_distro_warning("runtime dependency staging"),
             "fi",
             "",
         ]
+
+    @staticmethod
+    def _get_fix_library_alternatives_commands() -> list[str]:
+        """Return commands that restore the BLAS/LAPACK SONAME symlinks.
+
+        ``libblas3`` and ``liblapack3`` install their libraries into provider
+        subdirectories (``blas/`` and ``lapack/``) and rely on their ``postinst``
+        running ``update-alternatives`` to create the canonical SONAME symlink
+        (e.g. ``libblas.so.3``) in the default linker search path. Staging
+        packages with rosdep unpacks the files but never runs maintainer
+        scripts, so that symlink is missing and the dynamic linker cannot find
+        the libraries (which breaks ``rclpy``/numpy and any node that links
+        BLAS/LAPACK). Recreate the symlink with a relative target so it survives
+        the install -> prime -> rock relocation.
+        """
+        return [
+            "##[rockcraft.colcon] Restoring BLAS/LAPACK SONAME symlinks",
+            "for _prov in blas lapack; do",
+            'for _so in "${CRAFT_PART_INSTALL}"/usr/lib/*/"${_prov}"/lib*.so.*; do',
+            '[ -e "${_so}" ] || continue',
+            '_dest="$(dirname "$(dirname "${_so}")")/$(basename "${_so}")"',
+            '[ -e "${_dest}" ] || ln -s "${_prov}/$(basename "${_so}")" "${_dest}"',
+            "done",
+            "done",
+            "unset _prov _so _dest",
+        ]
+
+    @staticmethod
+    def _get_no_ros_distro_warning(action: str) -> str:
+        """Return a shell command warning that ``ROS_DISTRO`` is unset.
+
+        Without ``ROS_DISTRO`` the rosdep passes cannot run, so the dependency
+        resolution is skipped. Emit a visible warning to the build log so this
+        no-op does not go unnoticed (e.g. when the colcon plugin is used without
+        a ros2-* extension and ``ROS_DISTRO`` was never set).
+        """
+        return (
+            f'echo "##[rockcraft.colcon] WARNING: ROS_DISTRO is not set; '
+            f"skipping ROS 2 {action}. Set ROS_DISTRO in the part build-environment "
+            f'(or add a ros2-* extension) so rosdep can resolve dependencies." >&2'
+        )
