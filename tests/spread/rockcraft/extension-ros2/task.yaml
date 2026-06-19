@@ -1,0 +1,84 @@
+summary: ROS 2 extension test (talker/listener with ros2-{foxy,humble,jazzy,lyrical})
+
+# Each variant pairs a ros2-* extension with the matching Ubuntu base and
+# ROS 2 distribution:
+#   - ros2-foxy     -> ubuntu@20.04 (focal)
+#   - ros2-humble   -> ubuntu@22.04 (jammy)
+#   - ros2-jazzy    -> ubuntu@24.04 (noble)
+#   - ros2-lyrical  -> ubuntu@26.04 (resolute)
+# Foxy predates the YAML launch demo, so it uses the Python launch file. Its
+# base (ubuntu@20.04) is end-of-life, so packing needs --ignore=unmaintained.
+environment:
+  # The ros2-* extensions are experimental while they stabilise.
+  ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
+
+  DISTRO/foxy_2004: foxy
+  BASE/foxy_2004: ubuntu@20.04
+  LAUNCH_FILE/foxy_2004: talker_listener.launch.py
+  PACK_ARGS/foxy_2004: --ignore=unmaintained
+
+  DISTRO/humble_2204: humble
+  BASE/humble_2204: ubuntu@22.04
+  LAUNCH_FILE/humble_2204: talker_listener_launch.yaml
+  PACK_ARGS/humble_2204: ""
+
+  DISTRO/jazzy_2404: jazzy
+  BASE/jazzy_2404: ubuntu@24.04
+  LAUNCH_FILE/jazzy_2404: talker_listener_launch.yaml
+  PACK_ARGS/jazzy_2404: ""
+
+  DISTRO/lyrical_2604: lyrical
+  BASE/lyrical_2604: ubuntu@26.04
+  LAUNCH_FILE/lyrical_2604: talker_listener_launch.yaml
+  PACK_ARGS/lyrical_2604: ""
+
+prepare: |
+  sed -e "s/@DISTRO@/${DISTRO}/g" \
+      -e "s|@BASE@|${BASE}|g" \
+      -e "s|@LAUNCH_FILE@|${LAUNCH_FILE}|g" \
+      rockcraft-template.yaml > rockcraft.yaml
+
+execute: |
+  SCENARIO="extension-ros2"
+  ARCH=$(dpkg --print-architecture)
+  ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
+  IMAGE="${SCENARIO}:0.1"
+
+  # Build the rock & load it into docker
+  run_rockcraft pack ${PACK_ARGS}
+  echo expecting ${ROCK_FILE}
+  test -f ${ROCK_FILE}
+  rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
+  rm ${ROCK_FILE}
+
+  # Start the rock — pebble launches the talker-listener service automatically
+  # (startup: enabled) via the ros2 wrapper injected by the extension.
+  docker run -d --name "${SCENARIO}" "${IMAGE}"
+
+  # Give the launch file time to bring up both nodes and exchange messages.
+  sleep 5
+
+  output=$(docker exec "${SCENARIO}" pebble logs talker-listener 2>&1)
+  echo "${output}"
+
+  # Verify the talker published and the listener received at least one message.
+  echo "${output}" | MATCH "Publishing: 'Hello World:"
+  echo "${output}" | MATCH "I heard: \[Hello World:"
+
+  # The Python listener (a separate service) hears the C++ talker started by
+  # the launch file.
+  py_output=$(docker exec "${SCENARIO}" pebble logs listener-py 2>&1)
+  echo "${py_output}"
+  echo "${py_output}" | MATCH "I heard: \[Hello World:"
+
+  # The colcon workspace is an overlay in /opt/ros/overlay, found through the
+  # ament index once the wrappers have sourced it on top of the underlay.
+  for pkg in demo_nodes_cpp demo_nodes_py; do
+    prefix=$(docker exec "${SCENARIO}" ros2 pkg prefix "${pkg}")
+    echo "${prefix}" | MATCH "^/opt/ros/overlay$"
+  done
+
+restore: |
+  docker stop "${SCENARIO}" 2>/dev/null || true
+  docker rm "${SCENARIO}" 2>/dev/null || true
+  rm -f rockcraft.yaml

@@ -1,13 +1,27 @@
 name: plugin-colcon
-base: "@BASE@"
+base: "@ROCK_BASE@"
 build-base: "@BASE@"
 
 version: "0.1"
-summary: A ROS 2 rock that builds the demo_nodes_cpp talker with colcon.
-description: A ROS 2 rock that builds the demo_nodes_cpp talker with colcon.
+summary: A ROS 2 rock that builds the @PACKAGE@ talker and listener with colcon.
+description: A ROS 2 rock that builds the @PACKAGE@ talker and listener with colcon.
 license: GPL-3.0
 platforms:
   amd64:
+  arm64:
+
+services:
+  talker:
+    override: replace
+    startup: disabled
+    command: "/bin/sh -c '. /opt/ros/overlay/setup.sh && exec /opt/ros/overlay/lib/@PACKAGE@/talker'"
+    on-failure: shutdown
+
+  listener:
+    override: replace
+    startup: disabled
+    command: "/bin/sh -c '. /opt/ros/overlay/setup.sh && exec /opt/ros/overlay/lib/@PACKAGE@/listener'"
+    on-failure: shutdown
 
 package-repositories:
   - type: apt
@@ -21,19 +35,7 @@ parts:
     plugin: colcon
     source: https://github.com/ros2/demos.git
     source-branch: "@DISTRO@"
-    colcon-packages: [demo_nodes_cpp]
+    stage-packages: "@STAGE_PACKAGES@"
+    colcon-packages: ["@PACKAGE@"]
     build-environment:
       - ROS_DISTRO: "@DISTRO@"
-    build-packages:
-      - ros-@DISTRO@-ament-cmake
-      - ros-@DISTRO@-rclcpp
-      - ros-@DISTRO@-rclcpp-components
-      - ros-@DISTRO@-std-msgs
-      - ros-@DISTRO@-example-interfaces
-      - ros-@DISTRO@-rosidl-default-generators
-    stage-packages:
-      - ros-@DISTRO@-rclcpp
-      - ros-@DISTRO@-rclcpp-components
-      - ros-@DISTRO@-std-msgs
-      - ros-@DISTRO@-example-interfaces
-      - ros-@DISTRO@-rmw-fastrtps-cpp
