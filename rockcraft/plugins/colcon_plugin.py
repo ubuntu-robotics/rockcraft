@@ -20,6 +20,7 @@ import logging
 import os
 import shlex
 import sys
+from typing import cast
 
 from craft_parts.plugins import colcon_plugin
 from typing_extensions import override
@@ -55,6 +56,7 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
         """Return a set of required packages to install in the build environment."""
         return super().get_build_packages() | {
             "make",
+            "python3-colcon-package-information",
             "python3-colcon-recursive-crawl",
             "python3-rosdep",
         }
@@ -115,6 +117,30 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             "fi",
             # Resolve and install only the build-time dependencies declared in
             # the package.xml files found under the part's source directory.
+            # If colcon-packages is set, limit to only those packages' dirs.
+            self._get_rosdep_install_command(),
+            "else",
+            self._get_no_ros_distro_warning("build dependency installation"),
+            "fi",
+            "",
+        ]
+
+    def _get_rosdep_install_command(self) -> str:
+        """Return the ``rosdep install`` command, scoped to ``colcon-packages`` if set."""
+        options = cast(colcon_plugin.ColconPluginProperties, self._options)
+        if options.colcon_packages:
+            # Use colcon list (from python3-colcon-package-information) to discover
+            # only the selected packages' directories so that rosdep doesn't
+            # process unrelated packages in the source tree.
+            packages_select = " ".join(options.colcon_packages)
+            from_paths = (
+                "$(colcon --log-base /dev/null list"
+                f" --packages-select {packages_select}"
+                ' --paths-only --base-paths "${CRAFT_PART_SRC_WORK}")'
+            )
+        else:
+            from_paths = '"${CRAFT_PART_SRC_WORK}"'
+        return (
             "rosdep install"
             " --default-yes"
             " --ignore-packages-from-source"
@@ -123,12 +149,8 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             " --dependency-types=buildtool_export"
             " --dependency-types=build_export"
             ' --rosdistro "${ROS_DISTRO}"'
-            ' --from-paths "${CRAFT_PART_SRC_WORK}"',
-            "else",
-            self._get_no_ros_distro_warning("build dependency installation"),
-            "fi",
-            "",
-        ]
+            f" --from-paths {from_paths}"
+        )
 
     @override
     def _get_source_command(self, path: str) -> list[str]:
@@ -176,6 +198,26 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
                 env[key] = os.environ[key]
         env_flags = [f"{key}={shlex.quote(value)}" for key, value in env.items()]
 
+        options = cast(colcon_plugin.ColconPluginProperties, self._options)
+        ros_args = [
+            "--part-src",
+            '"${CRAFT_PART_SRC_WORK}"',
+            "--part-install",
+            '"${CRAFT_PART_INSTALL}"',
+            "--ros-version",
+            '"${ROS_VERSION}"',
+            "--ros-distro",
+            '"${ROS_DISTRO}"',
+            "--target-arch",
+            '"${CRAFT_TARGET_ARCH}"',
+            "--stage-cache-dir",
+            str(self._part_info.cache_dir.resolve()),
+            "--base",
+            str(self._part_info.base),
+        ]
+        if options.colcon_packages:
+            ros_args += ["--packages", *options.colcon_packages]
+
         stage_command = " ".join(
             [
                 "env",
@@ -185,20 +227,7 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
                 "-I",
                 "-m",
                 "rockcraft.plugins._ros",
-                "--part-src",
-                '"${CRAFT_PART_SRC_WORK}"',
-                "--part-install",
-                '"${CRAFT_PART_INSTALL}"',
-                "--ros-version",
-                '"${ROS_VERSION}"',
-                "--ros-distro",
-                '"${ROS_DISTRO}"',
-                "--target-arch",
-                '"${CRAFT_TARGET_ARCH}"',
-                "--stage-cache-dir",
-                str(self._part_info.cache_dir.resolve()),
-                "--base",
-                str(self._part_info.base),
+                *ros_args,
             ]
         )
 

@@ -95,7 +95,12 @@ def _parse_rosdep_resolve_dependencies(
 
 
 def _resolve_apt_dependencies(
-    *, part_src: str, part_install: str, ros_version: str, ros_distro: str
+    *,
+    part_src: str,
+    part_install: str,
+    ros_version: str,
+    ros_distro: str,
+    packages: list[str] | None = None,
 ) -> set[str]:
     """Resolve the runtime apt dependencies of the workspace with rosdep.
 
@@ -103,6 +108,9 @@ def _resolve_apt_dependencies(
     against the current ROS distribution and resolved to apt package names.
     Dependencies that are provided by another package in the workspace itself
     (i.e. already present under ``part_install``) are skipped.
+
+    If *packages* is given, only packages whose name appears in that list are
+    processed (mirrors the ``colcon-packages`` selection used at build time).
     """
     apt_packages: set[str] = set()
 
@@ -175,6 +183,7 @@ def stage_runtime_dependencies(
     target_arch: str,
     stage_cache_dir: str,
     base: str,
+    packages: list[str] | None = None,
 ) -> None:
     """Stage the runtime dependencies of the ROS workspace using rosdep."""
     logger.info("Staging runtime dependencies...")
@@ -184,6 +193,7 @@ def stage_runtime_dependencies(
         part_install=part_install,
         ros_version=ros_version,
         ros_distro=ros_distro,
+        packages=packages,
     )
 
     if not apt_packages:
@@ -223,6 +233,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-arch", required=True)
     parser.add_argument("--stage-cache-dir", required=True)
     parser.add_argument("--base", required=True)
+    parser.add_argument(
+        "--packages",
+        nargs="+",
+        default=None,
+        help="Limit to these ROS package names (mirrors colcon-packages).",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -234,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             target_arch=args.target_arch,
             stage_cache_dir=args.stage_cache_dir,
             base=args.base,
+            packages=args.packages,
         )
     except RockcraftError as error:
         # This module runs as a subprocess of the colcon plugin build step;
