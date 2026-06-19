@@ -8,6 +8,20 @@ description: A ROS 2 rock that builds the demo_nodes_cpp talker with colcon.
 license: GPL-3.0
 platforms:
   amd64:
+  arm64:
+
+services:
+  talker:
+    override: replace
+    startup: disabled
+    command: /lib/demo_nodes_cpp/talker
+    on-failure: shutdown
+
+  listener:
+    override: replace
+    startup: disabled
+    command: /lib/demo_nodes_cpp/listener
+    on-failure: shutdown
 
 package-repositories:
   - type: apt
@@ -24,16 +38,3 @@ parts:
     colcon-packages: [demo_nodes_cpp]
     build-environment:
       - ROS_DISTRO: "@DISTRO@"
-    build-packages:
-      - ros-@DISTRO@-ament-cmake
-      - ros-@DISTRO@-rclcpp
-      - ros-@DISTRO@-rclcpp-components
-      - ros-@DISTRO@-std-msgs
-      - ros-@DISTRO@-example-interfaces
-      - ros-@DISTRO@-rosidl-default-generators
-    stage-packages:
-      - ros-@DISTRO@-rclcpp
-      - ros-@DISTRO@-rclcpp-components
-      - ros-@DISTRO@-std-msgs
-      - ros-@DISTRO@-example-interfaces
-      - ros-@DISTRO@-rmw-fastrtps-cpp

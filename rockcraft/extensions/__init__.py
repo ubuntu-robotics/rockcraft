@@ -34,6 +34,12 @@ from .gunicorn import (
     FlaskFrameworkFactory,
 )
 from .registry import get_extension_class, get_extension_names, register, unregister
+from .ros2 import (
+    ROS2FoxyExtension,
+    ROS2HumbleExtension,
+    ROS2JazzyExtension,
+    ROS2LyricalExtension,
+)
 from .springboot import (
     SpringBootFramework,
     SpringBootFrameworkV2,
@@ -54,4 +60,8 @@ register("expressjs-framework", ExpressJSFrameworkFactory)
 register("fastapi-framework", FastAPIFrameworkFactory)
 register("flask-framework", FlaskFrameworkFactory)
 register("go-framework", GoFrameworkFactory)
+register("ros2-foxy", ROS2FoxyExtension)
+register("ros2-humble", ROS2HumbleExtension)
+register("ros2-jazzy", ROS2JazzyExtension)
+register("ros2-lyrical", ROS2LyricalExtension)
 register("spring-boot-framework", SpringBootFrameworkFactory)

@@ -51,3 +51,7 @@ persist across container replacement unless a volume is mounted at that path.
     go-framework
     express-framework
     spring-boot-framework
+    ros2-humble
+    ros2-jazzy
+    ros2-lyrical
+    ros2-foxy
