@@ -1,0 +1,59 @@
+summary: colcon plugin test (ROS 2 talker)
+
+# ROS 2 packages are only published for specific Ubuntu releases, so each
+# variant pairs an Ubuntu base with its matching ROS 2 distribution:
+#   - ROS 2 Humble   -> ubuntu@22.04 (jammy)
+#   - ROS 2 Jazzy    -> ubuntu@24.04 (noble)
+#   - ROS 2 Lyrical  -> ubuntu@26.04 (resolute)
+environment:
+  DISTRO/humble_2204: humble
+  BASE/humble_2204: ubuntu@22.04
+  SUITE/humble_2204: jammy
+
+  DISTRO/jazzy_2404: jazzy
+  BASE/jazzy_2404: ubuntu@24.04
+  SUITE/jazzy_2404: noble
+
+  DISTRO/lyrical_2604: lyrical
+  BASE/lyrical_2604: ubuntu@26.04
+  SUITE/lyrical_2604: resolute
+
+prepare: |
+  sed -e "s/@DISTRO@/${DISTRO}/g" \
+      -e "s|@BASE@|${BASE}|g" \
+      -e "s/@SUITE@/${SUITE}/g" \
+      rockcraft-template.yaml > rockcraft.yaml
+
+execute: |
+  SCENARIO="plugin-colcon"
+  ARCH=$(dpkg --print-architecture)
+  ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
+  IMAGE="${SCENARIO}:0.1"
+
+  # Build the rock & load it into docker
+  run_rockcraft pack
+  echo expecting ${ROCK_FILE}
+  test -f ${ROCK_FILE}
+  rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
+  rm ${ROCK_FILE}
+
+  # Start a detached container running pebble, then bring up the talker and
+  # listener services.  They communicate over DDS on the local network
+  # namespace and need no ROS Python stack.
+  docker run -d --name "${SCENARIO}" "${IMAGE}"
+  docker exec "${SCENARIO}" pebble start talker listener
+
+  # Give the nodes a moment to discover each other and exchange messages.
+  sleep 5
+
+  output=$(docker exec "${SCENARIO}" pebble logs talker listener 2>&1)
+  echo "${output}"
+
+  # Verify the talker published and the listener received at least one message.
+  echo "${output}" | MATCH "Publishing: 'Hello World:"
+  echo "${output}" | MATCH "I heard: \[Hello World:"
+
+restore: |
+  docker stop "${SCENARIO}" 2>/dev/null || true
+  docker rm "${SCENARIO}" 2>/dev/null || true
+  rm -f rockcraft.yaml

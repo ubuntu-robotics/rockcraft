@@ -108,11 +108,13 @@ class Extension(abc.ABC):
             p
             for p in self.get_parts_snippet()
             if not p.startswith(f"{extension_name}/")
+            and not p.startswith(f"{extension_name}-")
         ]
         if invalid_parts:
             raise ValueError(
                 f"Extension has invalid part names: {invalid_parts!r}. "
-                "Format is <extension-name>/<part-name>"
+                "Format is <extension-name>/<part-name> or, for bases that do not "
+                "allow '/' in part names, <extension-name>-<part-name>"
             )
 
 

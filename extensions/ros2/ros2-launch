@@ -1,0 +1,37 @@
+#!/bin/bash
+# ROS 2 launcher wrapper injected by the ros2-* Rockcraft extensions.
+#
+# Discovers and sources the ROS 2 underlay installed under /opt/ros/, extends
+# AMENT_PREFIX_PATH with the rock root (/) so that packages installed by
+# colcon with --merge-install are also discoverable by the ament tooling,
+# then exec's the provided command.
+#
+# Usage: ros2-launch <command> [args...]
+#   e.g. ros2-launch ros2 launch my_pkg my_launch.yaml
+
+set -e
+
+_ros2_setup=""
+# Glob expands in alphabetical order; ROS distros are named alphabetically
+# in release order (Humble < Iron < Jazzy < Lyrical < …), so iterating without
+# breaking means _ros2_setup ends up pointing at the latest installed distro.
+for _f in /opt/ros/*/setup.sh; do
+    if [ -f "$_f" ]; then
+        _ros2_setup="$_f"
+    fi
+done
+
+if [ -z "${_ros2_setup}" ]; then
+    echo "ros2-launch: no ROS 2 installation found under /opt/ros/" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${_ros2_setup}"
+unset _f _ros2_setup
+
+# Prepend / so that colcon's --merge-install packages (installed at the rock
+# root) are visible alongside the system ROS packages.
+export AMENT_PREFIX_PATH="/:${AMENT_PREFIX_PATH:-}"
+
+exec "$@"
