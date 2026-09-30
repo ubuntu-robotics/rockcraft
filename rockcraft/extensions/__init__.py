@@ -23,7 +23,12 @@ from .fastapi import FastAPIFramework
 from .go import GoFramework
 from .gunicorn import DjangoFramework, FlaskFramework
 from .registry import get_extension_class, get_extension_names, register, unregister
-from .ros2 import ROS2HumbleExtension, ROS2JazzyExtension, ROS2LyricalExtension
+from .ros2 import (
+    ROS2FoxyExtension,
+    ROS2HumbleExtension,
+    ROS2JazzyExtension,
+    ROS2LyricalExtension,
+)
 from .springboot import SpringBootFramework
 
 __all__ = [
@@ -43,4 +48,5 @@ register("go-framework", GoFramework)
 register("ros2-humble", ROS2HumbleExtension)
 register("ros2-jazzy", ROS2JazzyExtension)
 register("ros2-lyrical", ROS2LyricalExtension)
+register("ros2-foxy", ROS2FoxyExtension)
 register("spring-boot-framework", SpringBootFramework)

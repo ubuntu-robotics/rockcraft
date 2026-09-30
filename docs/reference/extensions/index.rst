@@ -23,3 +23,4 @@ initiating a new rock.
     ros2-humble
     ros2-jazzy
     ros2-lyrical
+    ros2-foxy

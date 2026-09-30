@@ -22,6 +22,8 @@ from typing import Any
 from craft_cli import emit
 from typing_extensions import override
 
+from rockcraft import errors
+
 from .extension import Extension, get_extensions_data_dir
 
 _ROS2_APT_KEY_ID = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
@@ -223,3 +225,23 @@ class ROS2LyricalExtension(_ROS2Base):
     @override
     def suite(self) -> str:
         return "resolute"
+
+
+class ROS2FoxyExtension(_ROS2Base):
+    """Extension for ROS 2 Foxy Fitzroy on ubuntu@20.04."""
+
+    @staticmethod
+    @override
+    def get_supported_bases() -> tuple[str, ...]:
+        """Return supported bases."""
+        return ("bare", "ubuntu@20.04", "ubuntu:20.04")
+
+    @property
+    @override
+    def distro(self) -> str:
+        return "foxy"
+
+    @property
+    @override
+    def suite(self) -> str:
+        return "focal"

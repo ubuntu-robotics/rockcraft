@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Tests for the ROS 2 extensions (ros2-humble, ros2-jazzy, ros2-lyrical)."""
+"""Tests for the ROS 2 extensions (ros2-humble, ros2-jazzy, ros2-lyrical, ros2-foxy)."""
 
 import pytest
 from rockcraft import extensions
@@ -22,6 +22,7 @@ from rockcraft.errors import ExtensionError
 from rockcraft.extensions.ros2 import (
     _ROS2_APT_KEY_ID,
     _ROS2_APT_URL,
+    ROS2FoxyExtension,
     ROS2HumbleExtension,
     ROS2JazzyExtension,
     ROS2LyricalExtension,
@@ -69,6 +70,7 @@ def ros2_extensions(mock_extensions, monkeypatch):
     extensions.register("ros2-humble", ROS2HumbleExtension)
     extensions.register("ros2-jazzy", ROS2JazzyExtension)
     extensions.register("ros2-lyrical", ROS2LyricalExtension)
+    extensions.register("ros2-foxy", ROS2FoxyExtension)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +217,7 @@ def test_ros2_matching_build_base_accepted(
         (ROS2HumbleExtension, "humble", "jammy"),
         (ROS2JazzyExtension, "jazzy", "noble"),
         (ROS2LyricalExtension, "lyrical", "resolute"),
+        (ROS2FoxyExtension, "foxy", "focal"),
     ],
 )
 def test_ros2_get_root_snippet(tmp_path, ext_class, distro, suite):
@@ -238,6 +241,7 @@ def test_ros2_get_root_snippet(tmp_path, ext_class, distro, suite):
         (ROS2HumbleExtension, "humble"),
         (ROS2JazzyExtension, "jazzy"),
         (ROS2LyricalExtension, "lyrical"),
+        (ROS2FoxyExtension, "foxy"),
     ],
 )
 def test_ros2_get_root_snippet_emits_launcher_notice(
@@ -263,6 +267,7 @@ def test_ros2_get_root_snippet_emits_launcher_notice(
         (ROS2HumbleExtension, "humble"),
         (ROS2JazzyExtension, "jazzy"),
         (ROS2LyricalExtension, "lyrical"),
+        (ROS2FoxyExtension, "foxy"),
     ],
 )
 def test_ros2_get_part_snippet(tmp_path, ext_class, distro):
@@ -278,6 +283,7 @@ def test_ros2_get_part_snippet(tmp_path, ext_class, distro):
         (ROS2HumbleExtension, "humble"),
         (ROS2JazzyExtension, "jazzy"),
         (ROS2LyricalExtension, "lyrical"),
+        (ROS2FoxyExtension, "foxy"),
     ],
 )
 def test_ros2_get_parts_snippet_launcher(tmp_path, ext_class, distro):
@@ -307,6 +313,7 @@ def test_ros2_get_parts_snippet_launcher(tmp_path, ext_class, distro):
         ("ros2-humble", "ubuntu@22.04", "humble", "jammy"),
         ("ros2-jazzy", "ubuntu@24.04", "jazzy", "noble"),
         ("ros2-lyrical", "ubuntu@26.04", "lyrical", "resolute"),
+        ("ros2-foxy", "ubuntu@20.04", "foxy", "focal"),
     ],
 )
 def test_ros2_apply_extension(tmp_path, extension_name, base, distro, suite):
