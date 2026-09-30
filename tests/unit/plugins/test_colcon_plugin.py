@@ -68,6 +68,7 @@ def test_get_build_packages(base, tmp_path):
         "python3-colcon-parallel-executor",
         "python3-colcon-package-information",
         "python3-colcon-recursive-crawl",
+        "python3-colcon-ros",
         "python3-rosdep",
     }
 
@@ -203,13 +204,58 @@ def test_get_build_commands_rosdep_update_runs_once(base, tmp_path):
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_rosdep_guarded_on_ros_distro(base, tmp_path):
-    # The whole rosdep block must be guarded on ROS_DISTRO being set.
+def test_get_build_commands_fails_early_without_ros_distro(base, tmp_path):
+    # The install base, the underlay and rosdep all depend on ROS_DISTRO, so the
+    # build must fail before doing anything else when it is unset.
     plugin = create_plugin(base, tmp_path)
 
     commands = plugin.get_build_commands()
 
-    assert 'if [ -n "${ROS_DISTRO:-}" ]; then' in commands
+    assert commands[:5] == [
+        'if [ -z "${ROS_DISTRO:-}" ]; then',
+        commands[1],
+        "exit 1",
+        "fi",
+        "",
+    ]
+    assert "ERROR: ROS_DISTRO is not set" in commands[1]
+    # The error is written to stderr.
+    assert commands[1].rstrip().endswith(">&2")
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_installs_in_opt_ros_overlay(base, tmp_path):
+    # The workspace is an overlay, apart from the underlay in /opt/ros/<distro>.
+    plugin = create_plugin(base, tmp_path)
+
+    build_command = get_colcon_build_command(plugin)
+
+    install_base = f"{plugin._part_info.part_install_dir}/opt/ros/overlay"
+    assert f"--install-base {install_base} " in build_command
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_relocates_install_prefix(base, tmp_path):
+    # colcon writes the build-time install base in its setup scripts, which does
+    # not exist in the rock, so it is rewritten to the final prefix once the
+    # build is done.
+    plugin = create_plugin(base, tmp_path)
+
+    commands = plugin.get_build_commands()
+
+    part_install = plugin._part_info.part_install_dir
+    colcon_build = next(i for i, line in enumerate(commands) if "colcon build" in line)
+    relocate = next(i for i, line in enumerate(commands) if "xargs" in line)
+
+    assert colcon_build < relocate
+    # The overlay's install base and the underlay's copy in the part install
+    # dir (chained by colcon) share the prefix that is rewritten.
+    # grep finding nothing must not abort the build (set -o pipefail).
+    assert (
+        f'grep -rIlZF "{part_install}/opt/ros/" "{part_install}/opt/ros/overlay" '
+        "|| true" in commands[relocate]
+    )
+    assert f'sed -i "s|{part_install}/opt/ros/|/opt/ros/|g"' in commands[relocate]
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
@@ -237,110 +283,15 @@ def test_get_build_commands_rosdep_build_dependencies_only(base, tmp_path):
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_stages_runtime_dependencies(base, tmp_path):
-    # Runtime dependencies are staged with rosdep after the colcon build.
+def test_get_build_commands_no_runtime_staging_subprocess(base, tmp_path):
+    # Runtime dependencies are staged by a craft-parts PRE_ORGANIZE callback
+    # (see rockcraft.plugins._ros), not by a build-script command.
     plugin = create_plugin(base, tmp_path)
 
     commands = plugin.get_build_commands()
 
-    colcon_build = next(i for i, line in enumerate(commands) if "colcon build" in line)
-    stage_command = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-
-    # Runtime staging happens after the colcon build.
-    assert colcon_build < stage_command
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_guarded_on_ros_distro(base, tmp_path):
-    # The runtime staging block must be guarded on ROS_DISTRO being set.
-    plugin = create_plugin(base, tmp_path)
-
-    commands = plugin.get_build_commands()
-
-    stage_index = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-    assert commands[stage_index - 1] == 'if [ -n "${ROS_DISTRO:-}" ]; then'
-    # The staging command is followed by the BLAS/LAPACK symlink fix, then an
-    # else branch warning, then `fi`.
-    else_index = next(
-        i
-        for i, line in enumerate(commands[stage_index:], stage_index)
-        if line == "else"
-    )
-    assert commands[else_index + 2] == "fi"
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_restores_blas_lapack_symlinks(base, tmp_path):
-    # The runtime staging block recreates the BLAS/LAPACK SONAME symlinks that
-    # update-alternatives would normally create, since staging packages does not
-    # run maintainer scripts.
-    plugin = create_plugin(base, tmp_path)
-
-    commands = plugin.get_build_commands()
-
-    stage_index = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-    symlink_index = next(
-        i for i, line in enumerate(commands) if "Restoring BLAS/LAPACK" in line
-    )
-    # The symlink fix runs after the runtime dependencies are staged.
-    assert symlink_index > stage_index
-    # The provider dirs (blas/, lapack/) are iterated and a relative SONAME
-    # symlink is created in the parent (default linker) directory.
-    assert "for _prov in blas lapack; do" in commands
-    assert any(
-        'ln -s "${_prov}/$(basename "${_so}")" "${_dest}"' in line for line in commands
-    )
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_warns_when_ros_distro_unset(base, tmp_path):
-    # When ROS_DISTRO is unset, both rosdep blocks must emit a visible warning
-    # instead of silently skipping dependency resolution.
-    plugin = create_plugin(base, tmp_path)
-
-    commands = plugin.get_build_commands()
-
-    warnings = [
-        line
-        for line in commands
-        if "WARNING: ROS_DISTRO is not set" in line and line.startswith("echo ")
-    ]
-    # One warning for the build-dependency block, one for the runtime-staging
-    # block.
-    assert len(warnings) == 2
-    assert any("build dependency installation" in line for line in warnings)
-    assert any("runtime dependency staging" in line for line in warnings)
-    # Each warning is written to stderr.
-    assert all(line.rstrip().endswith(">&2") for line in warnings)
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_invocation(base, tmp_path):
-    # The runtime staging command invokes the helper module with the expected
-    # craft environment variables.
-    plugin = create_plugin(base, tmp_path)
-
-    stage_command = next(
-        line for line in plugin.get_build_commands() if "rockcraft.plugins._ros" in line
-    )
-
-    # The helper is invoked as a module with a clean environment.
-    assert "env -i " in stage_command
-    assert "-m rockcraft.plugins._ros" in stage_command
-    assert '--part-src "${CRAFT_PART_SRC_WORK}"' in stage_command
-    assert '--part-install "${CRAFT_PART_INSTALL}"' in stage_command
-    assert '--ros-version "${ROS_VERSION}"' in stage_command
-    assert '--ros-distro "${ROS_DISTRO}"' in stage_command
-    assert '--target-arch "${CRAFT_TARGET_ARCH}"' in stage_command
-    assert f"--base {base}" in stage_command
-    # When no colcon-packages is set, --packages is not passed.
-    assert "--packages" not in stage_command
+    assert not any("rockcraft.plugins._ros" in line for line in commands)
+    assert not any(line.startswith("env -i ") for line in commands)
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
@@ -376,16 +327,3 @@ def test_get_build_commands_rosdep_no_filter_without_colcon_packages(base, tmp_p
 
     assert '--from-paths "${CRAFT_PART_SRC_WORK}"' in rosdep_install
     assert "--packages-select" not in rosdep_install
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_respects_colcon_packages(base, tmp_path):
-    # When colcon-packages is set, the --packages flag is forwarded to the
-    # _ros.py helper so that only the selected packages' runtime deps are staged.
-    plugin = create_plugin(base, tmp_path, **{"colcon-packages": ["demo_nodes_cpp"]})
-
-    stage_command = next(
-        line for line in plugin.get_build_commands() if "rockcraft.plugins._ros" in line
-    )
-
-    assert "--packages demo_nodes_cpp" in stage_command
