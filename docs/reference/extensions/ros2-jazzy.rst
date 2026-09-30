@@ -20,9 +20,16 @@ It automatically:
 
 .. note::
 
-    The ``ros2-jazzy`` extension is compatible with the ``ubuntu@24.04`` base
-    only. Use :ref:`ros2-humble <reference-ros2-humble>` for ``ubuntu@22.04`` or
-    :ref:`ros2-lyrical <reference-ros2-lyrical>` for ``ubuntu@26.04``.
+    The ``ros2-jazzy`` extension is compatible with the ``ubuntu@24.04`` and
+    ``bare`` bases. Use :ref:`ros2-humble <reference-ros2-humble>` for
+    ``ubuntu@22.04`` or :ref:`ros2-lyrical <reference-ros2-lyrical>` for
+    ``ubuntu@26.04``.
+
+.. note::
+
+    With the ``bare`` base you must set ``build-base: ubuntu@24.04`` so the
+    ROS 2 apt repository (``noble`` suite) matches the build environment. A
+    mismatched ``build-base`` is rejected at build time.
 
 .. important::
 

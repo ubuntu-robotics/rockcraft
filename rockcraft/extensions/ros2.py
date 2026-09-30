@@ -50,6 +50,42 @@ class _ROS2Base(Extension):
     def suite(self) -> str:
         """Return the Ubuntu suite codename, e.g. ``'jammy'``."""
 
+    @classmethod
+    def _expected_base(cls) -> str:
+        """Return the Ubuntu base this extension targets, e.g. ``'ubuntu@22.04'``.
+
+        Derived from :meth:`get_supported_bases`, whose first ``@``-form entry
+        is the targeted base (``bare`` and the deprecated ``ubuntu:X.Y`` alias
+        are skipped).
+        """
+        return next(b for b in cls.get_supported_bases() if "@" in b)
+
+    @override
+    def _validate_extras(self, extension_name: str) -> None:
+        """Check that a set ``build-base`` matches the extension's base.
+
+        The ROS 2 apt repository targets one Ubuntu suite, so the build
+        environment must run that suite. Mixing bases and build-bases is not
+        allowed: whenever ``build-base`` is set it must equal the targeted
+        base. When it is unset it defaults to the base, which is already
+        validated against :meth:`get_supported_bases`.
+        """
+        base: str | None = self.yaml_data.get("base")
+        if base == "bare":
+            build_base: str | None = self.yaml_data.get("build-base")
+            expected_base = self._expected_base()
+
+            if build_base != expected_base:
+                raise errors.ExtensionError(
+                    f"Extension {extension_name!r} targets {expected_base!r} "
+                    f"(ROS 2 {self.distro} on the {self.suite!r} suite), but the project "
+                    f"sets build-base {build_base!r}.",
+                    resolution=(
+                        f"Set 'build-base: {expected_base}' so the ROS 2 apt "
+                        "repository matches the build environment."
+                    ),
+                )
+
     @staticmethod
     @override
     def is_experimental(base: str | None) -> bool:
@@ -136,7 +172,7 @@ class ROS2HumbleExtension(_ROS2Base):
     @override
     def get_supported_bases() -> tuple[str, ...]:
         """Return supported bases."""
-        return ("ubuntu@22.04", "ubuntu:22.04")
+        return ("bare", "ubuntu@22.04", "ubuntu:22.04")
 
     @property
     @override
@@ -156,7 +192,7 @@ class ROS2JazzyExtension(_ROS2Base):
     @override
     def get_supported_bases() -> tuple[str, ...]:
         """Return supported bases."""
-        return ("ubuntu@24.04", "ubuntu:24.04")
+        return ("bare", "ubuntu@24.04", "ubuntu:24.04")
 
     @property
     @override
@@ -176,7 +212,7 @@ class ROS2LyricalExtension(_ROS2Base):
     @override
     def get_supported_bases() -> tuple[str, ...]:
         """Return supported bases."""
-        return ("ubuntu@26.04", "ubuntu:26.04")
+        return ("bare", "ubuntu@26.04", "ubuntu:26.04")
 
     @property
     @override

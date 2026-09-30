@@ -83,19 +83,25 @@ def ros2_extensions(mock_extensions, monkeypatch):
             ROS2HumbleExtension,
             "humble",
             "jammy",
-            ("ubuntu@22.04", "ubuntu:22.04"),
+            ("bare", "ubuntu@22.04", "ubuntu:22.04"),
         ),
         (
             ROS2JazzyExtension,
             "jazzy",
             "noble",
-            ("ubuntu@24.04", "ubuntu:24.04"),
+            ("bare", "ubuntu@24.04", "ubuntu:24.04"),
         ),
         (
             ROS2LyricalExtension,
             "lyrical",
             "resolute",
-            ("ubuntu@26.04", "ubuntu:26.04"),
+            ("bare", "ubuntu@26.04", "ubuntu:26.04"),
+        ),
+        (
+            ROS2FoxyExtension,
+            "foxy",
+            "focal",
+            ("bare", "ubuntu@20.04", "ubuntu:20.04"),
         ),
     ],
 )
@@ -112,6 +118,90 @@ def test_ros2_extension_properties(
     assert ext.get_supported_bases() == expected_bases
     assert ext.is_experimental(None) is True
     assert ext.is_experimental(expected_bases[0]) is True
+
+
+@pytest.mark.usefixtures("ros2_extensions")
+@pytest.mark.parametrize(
+    ("extension_name", "build_base", "distro", "suite"),
+    [
+        ("ros2-humble", "ubuntu@22.04", "humble", "jammy"),
+        ("ros2-jazzy", "ubuntu@24.04", "jazzy", "noble"),
+        ("ros2-lyrical", "ubuntu@26.04", "lyrical", "resolute"),
+        ("ros2-foxy", "ubuntu@20.04", "foxy", "focal"),
+    ],
+)
+def test_ros2_apply_extension_bare_base(
+    tmp_path, extension_name, build_base, distro, suite
+):
+    """The 'bare' base is supported; the ROS 2 apt repo matches the build-base."""
+    yaml_data = _make_input_yaml("bare", extension_name)
+    # 'bare' requires an explicit build-base matching the ROS 2 distro suite.
+    yaml_data["build-base"] = build_base
+    applied = extensions.apply_extensions(tmp_path, yaml_data)
+
+    assert applied["base"] == "bare"
+    assert applied["package-repositories"] == [
+        {
+            "type": "apt",
+            "url": _ROS2_APT_URL,
+            "components": ["main"],
+            "suites": [suite],
+            "key-id": _ROS2_APT_KEY_ID,
+        }
+    ]
+    assert applied["parts"]["my-node"]["build-environment"] == [{"ROS_DISTRO": distro}]
+
+
+@pytest.mark.usefixtures("ros2_extensions")
+@pytest.mark.parametrize(
+    ("extension_name", "base", "mismatched_build_base"),
+    [
+        # A bare base must pair with the extension's matching base: the build
+        # environment comes entirely from build-base, so a different one
+        # mismatches the ROS 2 apt repo suite.
+        ("ros2-humble", "bare", "ubuntu@24.04"),
+        ("ros2-jazzy", "bare", "ubuntu@22.04"),
+        ("ros2-lyrical", "bare", "ubuntu@24.04"),
+        ("ros2-foxy", "bare", "ubuntu@24.04"),
+    ],
+)
+def test_ros2_mismatched_build_base_raises(
+    tmp_path, extension_name, base, mismatched_build_base
+):
+    """A bare base with a mismatched build-base is rejected."""
+    yaml_data = _make_input_yaml(base, extension_name)
+    yaml_data["build-base"] = mismatched_build_base
+
+    with pytest.raises(ExtensionError, match="build-base"):
+        extensions.apply_extensions(tmp_path, yaml_data)
+
+
+@pytest.mark.usefixtures("ros2_extensions")
+@pytest.mark.parametrize(
+    ("extension_name", "base", "matching_build_base"),
+    [
+        # bare base with the matching build-base is fine.
+        ("ros2-humble", "bare", "ubuntu@22.04"),
+        ("ros2-jazzy", "bare", "ubuntu@24.04"),
+        # non-bare base with no build-base (defaults to base) is fine.
+        ("ros2-humble", "ubuntu@22.04", None),
+        ("ros2-lyrical", "ubuntu@26.04", None),
+        # non-bare base with an explicit matching build-base is fine.
+        ("ros2-jazzy", "ubuntu@24.04", "ubuntu@24.04"),
+        ("ros2-humble", "ubuntu@22.04", "ubuntu@22.04"),
+    ],
+)
+def test_ros2_matching_build_base_accepted(
+    tmp_path, extension_name, base, matching_build_base
+):
+    """Matching (or defaulted) build-base passes validation."""
+    yaml_data = _make_input_yaml(base, extension_name)
+    if matching_build_base is not None:
+        yaml_data["build-base"] = matching_build_base
+
+    applied = extensions.apply_extensions(tmp_path, yaml_data)
+
+    assert "extensions" not in applied
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +382,7 @@ def test_ros2_existing_package_repositories_preserved(tmp_path):
         ("ros2-humble", "ubuntu@24.04"),
         ("ros2-jazzy", "ubuntu@22.04"),
         ("ros2-lyrical", "ubuntu@24.04"),
+        ("ros2-foxy", "ubuntu@24.04"),
     ],
 )
 def test_ros2_wrong_base_raises(tmp_path, extension_name, wrong_base):

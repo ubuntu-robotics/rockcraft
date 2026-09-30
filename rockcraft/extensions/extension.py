@@ -117,6 +117,19 @@ class Extension(abc.ABC):
                 "allow '/' in part names, <extension-name>-<part-name>"
             )
 
+        self._validate_extras(extension_name)
+
+    def _validate_extras(self, extension_name: str) -> None:  # noqa: B027
+        """Perform extension-specific validation.
+
+        Hook called at the end of :meth:`validate`. Subclasses may override it
+        to check cross-field consistency (e.g. ``base`` vs ``build-base``).
+        The full, unprocessed project mapping is available as
+        ``self.yaml_data``.
+
+        :param extension_name: the name of the extension being parsed.
+        """
+
 
 def get_extensions_data_dir() -> Path:
     """Return the path to the extension data directory."""
