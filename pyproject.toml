@@ -12,6 +12,9 @@ dependencies = [
     "craft-platforms>=0.11.0",
     "craft-providers>=3.6.0",
     "overrides>=7.7.0",
+    # catkin-pkg is used by the colcon plugin to parse ROS 2 package.xml files
+    # when staging runtime dependencies with rosdep.
+    "catkin-pkg>=1.0.0",
     # setuptools >= 80.9 has a noisy warning about pkg_resources
     "setuptools~=80.10.2",
     "spdx-lookup>=0.3.3",
