@@ -16,10 +16,13 @@
 
 """Stage ROS 2 runtime dependencies of a colcon workspace with rosdep.
 
-This module is executed as a script from the colcon plugin's build step
-(``python -m rockcraft.plugins._ros``) because the runtime dependencies of a
-ROS 2 workspace are only known at build time, once the workspace sources (and
-their ``package.xml`` files) have been pulled.
+The runtime dependencies of a ROS 2 workspace are only known at build time,
+once the workspace sources (and their ``package.xml`` files) have been pulled.
+This module is therefore run at build time:
+:func:`stage_runtime_dependencies_callback` is registered as a craft-parts
+``PRE_ORGANIZE`` callback for the build step of colcon parts (see
+:mod:`rockcraft.services.lifecycle`), and runs in-process in the build
+environment right after the colcon build installed the workspace.
 
 The ``exec_depends`` declared in the workspace's ``package.xml`` files are
 resolved to apt packages with rosdep, fetched as stage packages (together with
@@ -27,18 +30,13 @@ their transitive apt dependencies) and unpacked into the part's install
 directory so they are primed into the rock.
 """
 
-# Enable deferred evaluation of annotations so that the modern PEP 585/604
-# syntax below (``dict[str, set[str]]``, ``list[str] | None``) also imports
-# under Python 3.8 (e.g. a destructive-mode build on a focal host).
-from __future__ import annotations
-
-import argparse
 import logging
 import pathlib
+import re
 import subprocess
-import sys
 
 from catkin_pkg import packages as catkin_packages
+from craft_parts.infos import StepInfo
 from craft_parts.packages import Repository
 
 from rockcraft.errors import RockcraftError
@@ -226,51 +224,106 @@ def stage_runtime_dependencies(
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the runtime dependency staging from the command line."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+def stage_runtime_dependencies_callback(
+    step_info: StepInfo, *, packages: list[str] | None = None
+) -> bool:
+    """Stage the ROS 2 runtime dependencies of a colcon part.
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--part-src", required=True)
-    parser.add_argument("--part-install", required=True)
-    parser.add_argument("--ros-version", required=True)
-    parser.add_argument("--ros-distro", required=True)
-    parser.add_argument("--target-arch", required=True)
-    parser.add_argument("--stage-cache-dir", required=True)
-    parser.add_argument("--base", required=True)
-    parser.add_argument(
-        "--packages",
-        nargs="+",
-        default=None,
-        help="Limit to these ROS package names (mirrors colcon-packages).",
-    )
-    args = parser.parse_args(argv)
+    This is a craft-parts step callback meant to be registered for the build
+    step at the ``PRE_ORGANIZE`` hook point (see
+    :mod:`rockcraft.services.lifecycle`). It runs in-process, in the build
+    environment, right after the part's build script completed, so the
+    workspace sources (and their ``package.xml`` files) have been pulled and
+    the colcon build installed the workspace into the part's install
+    directory.
 
-    try:
-        stage_runtime_dependencies(
-            part_src=args.part_src,
-            part_install=args.part_install,
-            ros_version=args.ros_version,
-            ros_distro=args.ros_distro,
-            target_arch=args.target_arch,
-            stage_cache_dir=args.stage_cache_dir,
-            base=args.base,
-            packages=args.packages,
+    ``ROS_DISTRO`` is read from the part's build step environment (the
+    ``environment.sh`` that craft-parts generates for the build script); it is
+    *not* present in this process' own environment, which is merely the
+    environment rockcraft itself runs with. If ``ROS_DISTRO`` is not set the
+    staging is skipped with a warning, since rosdep cannot resolve
+    dependencies without a ROS distribution.
+
+    :param step_info: The step information passed by craft-parts.
+    :param packages: Limit staging to these ROS package names (mirrors the
+        ``colcon-packages`` selection used at build time).
+    :return: True, per the step callback convention.
+    """
+    environment = _read_step_environment(step_info)
+    ros_distro = environment.get("ROS_DISTRO", "")
+    if not ros_distro:
+        logger.warning(
+            "ROS_DISTRO is not set; skipping ROS 2 runtime dependency staging. "
+            "Set ROS_DISTRO in the part build-environment (or add a ros2-* "
+            "extension) so rosdep can resolve dependencies."
         )
-    except RockcraftError as error:
-        # This module runs as a subprocess of the colcon plugin build step;
-        # surface a clean, actionable message instead of a raw Python traceback
-        # (hence logging.error rather than logging.exception).
-        lines = [f"Error: {error}"]
-        if error.details:
-            lines.append(f"Details: {error.details}")
-        if error.resolution:
-            lines.append(f"Recommended resolution: {error.resolution}")
-        logger.error("\n".join(lines))  # noqa: TRY400
-        return 1
+        return True
 
-    return 0
+    stage_runtime_dependencies(
+        part_src=str(step_info.part_src_subdir),
+        part_install=str(step_info.part_install_dir),
+        ros_version=environment.get("ROS_VERSION", "2"),
+        ros_distro=ros_distro,
+        target_arch=step_info.target_arch,
+        stage_cache_dir=str(step_info.cache_dir),
+        base=str(step_info.project_info.base),
+        packages=packages,
+    )
+
+    _fix_library_alternatives(part_install=str(step_info.part_install_dir))
+
+    return True
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def _read_step_environment(step_info: StepInfo) -> dict[str, str]:
+    """Read the environment generated for the part's build step.
+
+    craft-parts writes the step environment to ``environment.sh`` in the
+    part's run directory right before executing the build script. The file is
+    a series of ``export KEY="value"`` lines covering the application, part,
+    plugin and user (``build-environment``) environment. It is sourced by the
+    build script but is *not* exported into the environment of the process
+    running the lifecycle, so it is read back here.
+    """
+    environment: dict[str, str] = {}
+    # The part's run directory is a sibling of its state directory.
+    environment_file = step_info.part_state_dir.parent / "run" / "environment.sh"
+    try:
+        lines = environment_file.read_text().splitlines()
+    except FileNotFoundError:
+        logger.debug("No build step environment file at %s", environment_file)
+        return environment
+
+    for line in lines:
+        match = re.fullmatch(r'export ([A-Za-z_][A-Za-z0-9_]*)="(.*)"', line)
+        if match:
+            environment[match.group(1)] = match.group(2)
+
+    return environment
+
+
+def _fix_library_alternatives(part_install: str) -> None:
+    """Restore the BLAS/LAPACK SONAME symlinks in the part's install directory.
+
+    ``libblas3`` and ``liblapack3`` install their libraries into provider
+    subdirectories (``blas/`` and ``lapack/``) and rely on their ``postinst``
+    running ``update-alternatives`` to create the canonical SONAME symlink
+    (e.g. ``libblas.so.3``) in the default linker search path. Staging
+    packages unpacks the files but never runs maintainer scripts, so that
+    symlink is missing and the dynamic linker cannot find the libraries (which
+    breaks ``rclpy``/numpy and any node that links BLAS/LAPACK). Recreate the
+    symlink with a relative target so it survives the install -> prime -> rock
+    relocation.
+    """
+    install_path = pathlib.Path(part_install)
+    for provider in ("blas", "lapack"):
+        for library in install_path.glob(f"usr/lib/*/{provider}/lib*.so.*"):
+            soname_link = library.parent.parent / library.name
+            if not soname_link.exists():
+                logger.debug(
+                    "Restoring SONAME symlink %s -> %s/%s",
+                    soname_link,
+                    provider,
+                    library.name,
+                )
+                soname_link.symlink_to(f"{provider}/{library.name}")

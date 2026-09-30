@@ -17,9 +17,6 @@
 """The Rockcraft colcon plugin."""
 
 import logging
-import os
-import shlex
-import sys
 from typing import cast
 
 from craft_parts.plugins import colcon_plugin
@@ -45,7 +42,10 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
       in the workspace's ``package.xml`` files, so users do not have to list
       every ROS runtime dependency by hand in ``stage-packages``. The runtime
       dependencies are resolved to apt packages and unpacked into the part's
-      install directory so they are primed into the rock.
+      install directory so they are primed into the rock. This runs as a
+      craft-parts ``PRE_ORGANIZE`` callback (see
+      :mod:`rockcraft.plugins._ros`), since the runtime dependencies are only
+      known once the workspace has been pulled and built.
     - Source the ROS environment with ``nounset`` (``set -u``) disabled. The
       ament setup scripts reference several unset shell variables, which would
       otherwise abort the ``set -euo pipefail`` build script.
@@ -80,21 +80,20 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
         """Return a list of commands to run during the build step.
 
         The build-time dependencies declared in the workspace are installed with
-        ``rosdep`` before the regular colcon build commands run, and the runtime
-        dependencies are staged with ``rosdep`` afterwards.
+        ``rosdep`` before the regular colcon build commands run. The runtime
+        dependencies are staged separately, by a ``PRE_ORGANIZE`` callback (see
+        :func:`rockcraft.plugins._ros.stage_runtime_dependencies_callback`),
+        once the build script has completed.
         """
-        return (
-            self._get_rosdep_commands()
-            + super().get_build_commands()
-            + self._get_stage_runtime_dependencies_commands()
-        )
+        return self._get_rosdep_commands() + super().get_build_commands()
 
     def _get_rosdep_commands(self) -> list[str]:
         """Return the commands that install build dependencies with rosdep.
 
         Only build-time dependency types are resolved here (``build``,
         ``buildtool`` and their ``_export`` counterparts); runtime dependencies
-        are handled by :meth:`_get_stage_runtime_dependencies_commands`.
+        are handled by the ``PRE_ORGANIZE`` callback (see
+        :func:`rockcraft.plugins._ros.stage_runtime_dependencies_callback`).
 
         The whole block is guarded on ``ROS_DISTRO`` being set, since rosdep
         cannot resolve dependencies without a ROS distribution.
@@ -167,105 +166,6 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             f'AMENT_CURRENT_PREFIX="{wspath}" . "{wspath}/local_setup.sh"',
             "set -u",
             "fi",
-        ]
-
-    def _get_stage_runtime_dependencies_commands(self) -> list[str]:
-        """Return the commands that stage runtime dependencies with rosdep.
-
-        The runtime dependencies declared in the workspace's ``package.xml``
-        files are resolved to apt packages and unpacked into the part's install
-        directory so they are primed into the rock. The resolution is performed
-        by the :mod:`rockcraft.plugins._ros` helper module, which is run with a
-        clean environment to avoid leaking the colcon build environment into the
-        rosdep and apt invocations.
-
-        The block is guarded on ``ROS_DISTRO`` being set, since rosdep cannot
-        resolve dependencies without a ROS distribution.
-        """
-        # Re-run the helper with a minimal, explicit environment so that the
-        # sourced ROS workspace does not interfere with rosdep and apt.
-        env = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
-        for key in (
-            "PATH",
-            "SNAP",
-            "SNAP_ARCH",
-            "SNAP_NAME",
-            "SNAP_VERSION",
-            "http_proxy",
-            "https_proxy",
-        ):
-            if key in os.environ:
-                env[key] = os.environ[key]
-        env_flags = [f"{key}={shlex.quote(value)}" for key, value in env.items()]
-
-        options = cast(colcon_plugin.ColconPluginProperties, self._options)
-        ros_args = [
-            "--part-src",
-            '"${CRAFT_PART_SRC_WORK}"',
-            "--part-install",
-            '"${CRAFT_PART_INSTALL}"',
-            "--ros-version",
-            '"${ROS_VERSION}"',
-            "--ros-distro",
-            '"${ROS_DISTRO}"',
-            "--target-arch",
-            '"${CRAFT_TARGET_ARCH}"',
-            "--stage-cache-dir",
-            str(self._part_info.cache_dir.resolve()),
-            "--base",
-            str(self._part_info.base),
-        ]
-        if options.colcon_packages:
-            ros_args += ["--packages", *options.colcon_packages]
-
-        stage_command = " ".join(
-            [
-                "env",
-                "-i",
-                *env_flags,
-                sys.executable,
-                "-I",
-                "-m",
-                "rockcraft.plugins._ros",
-                *ros_args,
-            ]
-        )
-
-        return [
-            "##[rockcraft.colcon] Staging runtime dependencies with rosdep",
-            'if [ -n "${ROS_DISTRO:-}" ]; then',
-            stage_command,
-            *self._get_fix_library_alternatives_commands(),
-            "else",
-            self._get_no_ros_distro_warning("runtime dependency staging"),
-            "fi",
-            "",
-        ]
-
-    @staticmethod
-    def _get_fix_library_alternatives_commands() -> list[str]:
-        """Return commands that restore the BLAS/LAPACK SONAME symlinks.
-
-        ``libblas3`` and ``liblapack3`` install their libraries into provider
-        subdirectories (``blas/`` and ``lapack/``) and rely on their ``postinst``
-        running ``update-alternatives`` to create the canonical SONAME symlink
-        (e.g. ``libblas.so.3``) in the default linker search path. Staging
-        packages with rosdep unpacks the files but never runs maintainer
-        scripts, so that symlink is missing and the dynamic linker cannot find
-        the libraries (which breaks ``rclpy``/numpy and any node that links
-        BLAS/LAPACK). Recreate the symlink with a relative target so it survives
-        the install -> prime -> rock relocation.
-        """
-        return [
-            "##[rockcraft.colcon] Restoring BLAS/LAPACK SONAME symlinks",
-            "for _prov in blas lapack; do",
-            'for _so in "${CRAFT_PART_INSTALL}"/usr/lib/*/"${_prov}"/lib*.so.*; do',
-            '[ -e "${_so}" ] || continue',
-            '_dest="$(dirname "$(dirname "${_so}")")/$(basename "${_so}")"',
-            '[ -e "${_dest}" ] || ln -s "${_prov}/$(basename "${_so}")" "${_dest}"',
-            "done",
-            "done",
-            "unset _prov _so _dest",
         ]
 
     @staticmethod

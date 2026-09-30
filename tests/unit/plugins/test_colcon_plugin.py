@@ -237,70 +237,20 @@ def test_get_build_commands_rosdep_build_dependencies_only(base, tmp_path):
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_stages_runtime_dependencies(base, tmp_path):
-    # Runtime dependencies are staged with rosdep after the colcon build.
+def test_get_build_commands_no_runtime_staging_subprocess(base, tmp_path):
+    # Runtime dependencies are staged by a craft-parts PRE_ORGANIZE callback
+    # (see rockcraft.plugins._ros), not by a build-script command.
     plugin = create_plugin(base, tmp_path)
 
     commands = plugin.get_build_commands()
 
-    colcon_build = next(i for i, line in enumerate(commands) if "colcon build" in line)
-    stage_command = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-
-    # Runtime staging happens after the colcon build.
-    assert colcon_build < stage_command
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_guarded_on_ros_distro(base, tmp_path):
-    # The runtime staging block must be guarded on ROS_DISTRO being set.
-    plugin = create_plugin(base, tmp_path)
-
-    commands = plugin.get_build_commands()
-
-    stage_index = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-    assert commands[stage_index - 1] == 'if [ -n "${ROS_DISTRO:-}" ]; then'
-    # The staging command is followed by the BLAS/LAPACK symlink fix, then an
-    # else branch warning, then `fi`.
-    else_index = next(
-        i
-        for i, line in enumerate(commands[stage_index:], stage_index)
-        if line == "else"
-    )
-    assert commands[else_index + 2] == "fi"
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_restores_blas_lapack_symlinks(base, tmp_path):
-    # The runtime staging block recreates the BLAS/LAPACK SONAME symlinks that
-    # update-alternatives would normally create, since staging packages does not
-    # run maintainer scripts.
-    plugin = create_plugin(base, tmp_path)
-
-    commands = plugin.get_build_commands()
-
-    stage_index = next(
-        i for i, line in enumerate(commands) if "rockcraft.plugins._ros" in line
-    )
-    symlink_index = next(
-        i for i, line in enumerate(commands) if "Restoring BLAS/LAPACK" in line
-    )
-    # The symlink fix runs after the runtime dependencies are staged.
-    assert symlink_index > stage_index
-    # The provider dirs (blas/, lapack/) are iterated and a relative SONAME
-    # symlink is created in the parent (default linker) directory.
-    assert "for _prov in blas lapack; do" in commands
-    assert any(
-        'ln -s "${_prov}/$(basename "${_so}")" "${_dest}"' in line for line in commands
-    )
+    assert not any("rockcraft.plugins._ros" in line for line in commands)
+    assert not any(line.startswith("env -i ") for line in commands)
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
 def test_get_build_commands_warns_when_ros_distro_unset(base, tmp_path):
-    # When ROS_DISTRO is unset, both rosdep blocks must emit a visible warning
+    # When ROS_DISTRO is unset, the rosdep block must emit a visible warning
     # instead of silently skipping dependency resolution.
     plugin = create_plugin(base, tmp_path)
 
@@ -311,36 +261,13 @@ def test_get_build_commands_warns_when_ros_distro_unset(base, tmp_path):
         for line in commands
         if "WARNING: ROS_DISTRO is not set" in line and line.startswith("echo ")
     ]
-    # One warning for the build-dependency block, one for the runtime-staging
-    # block.
-    assert len(warnings) == 2
-    assert any("build dependency installation" in line for line in warnings)
-    assert any("runtime dependency staging" in line for line in warnings)
-    # Each warning is written to stderr.
-    assert all(line.rstrip().endswith(">&2") for line in warnings)
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_invocation(base, tmp_path):
-    # The runtime staging command invokes the helper module with the expected
-    # craft environment variables.
-    plugin = create_plugin(base, tmp_path)
-
-    stage_command = next(
-        line for line in plugin.get_build_commands() if "rockcraft.plugins._ros" in line
-    )
-
-    # The helper is invoked as a module with a clean environment.
-    assert "env -i " in stage_command
-    assert "-m rockcraft.plugins._ros" in stage_command
-    assert '--part-src "${CRAFT_PART_SRC_WORK}"' in stage_command
-    assert '--part-install "${CRAFT_PART_INSTALL}"' in stage_command
-    assert '--ros-version "${ROS_VERSION}"' in stage_command
-    assert '--ros-distro "${ROS_DISTRO}"' in stage_command
-    assert '--target-arch "${CRAFT_TARGET_ARCH}"' in stage_command
-    assert f"--base {base}" in stage_command
-    # When no colcon-packages is set, --packages is not passed.
-    assert "--packages" not in stage_command
+    # One warning for the build-dependency block; the runtime staging is a
+    # Python callback that warns (and skips) on its own when ROS_DISTRO is
+    # unset.
+    assert len(warnings) == 1
+    assert "build dependency installation" in warnings[0]
+    # The warning is written to stderr.
+    assert warnings[0].rstrip().endswith(">&2")
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
@@ -376,16 +303,3 @@ def test_get_build_commands_rosdep_no_filter_without_colcon_packages(base, tmp_p
 
     assert '--from-paths "${CRAFT_PART_SRC_WORK}"' in rosdep_install
     assert "--packages-select" not in rosdep_install
-
-
-@pytest.mark.parametrize("base", ALL_BASES)
-def test_get_build_commands_runtime_staging_respects_colcon_packages(base, tmp_path):
-    # When colcon-packages is set, the --packages flag is forwarded to the
-    # _ros.py helper so that only the selected packages' runtime deps are staged.
-    plugin = create_plugin(base, tmp_path, **{"colcon-packages": ["demo_nodes_cpp"]})
-
-    stage_command = next(
-        line for line in plugin.get_build_commands() if "rockcraft.plugins._ros" in line
-    )
-
-    assert "--packages demo_nodes_cpp" in stage_command

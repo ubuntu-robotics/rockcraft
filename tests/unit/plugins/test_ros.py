@@ -13,12 +13,14 @@
 #
 # You should have received a copy of the GNU General Public License along with
 # this program.  If not, see <http://www.gnu.org/licenses/>.
-"""Tests for the colcon plugin runtime-dependency staging helper."""
+"""Tests for the colcon plugin runtime-dependency staging callback."""
 
+import pathlib
 import subprocess
 from unittest import mock
 
 import pytest
+from craft_parts import Part, PartInfo, ProjectDirs, ProjectInfo, Step, StepInfo
 from rockcraft.plugins import _ros
 
 
@@ -235,84 +237,110 @@ def test_stage_runtime_dependencies_no_packages(monkeypatch, tmp_path):
     fetch.assert_not_called()
 
 
-def test_main_invokes_staging(monkeypatch):
-    staging = mock.Mock()
-    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+def _make_step_info(tmp_path, environment=None) -> StepInfo:
+    """Create a build StepInfo for a colcon part, with the given step environment.
 
-    exit_code = _ros.main(
-        [
-            "--part-src",
-            "/part/src",
-            "--part-install",
-            "/part/install",
-            "--ros-version",
-            "2",
-            "--ros-distro",
-            "humble",
-            "--target-arch",
-            "amd64",
-            "--stage-cache-dir",
-            "/cache",
-            "--base",
-            "ubuntu@22.04",
-        ]
+    The step environment is written to the part's ``run/environment.sh``,
+    mimicking what craft-parts generates for the build script.
+    """
+    dirs = ProjectDirs(work_dir=tmp_path)
+    project_info = ProjectInfo(
+        project_dirs=dirs,
+        application_name="test",
+        project_name="test-rock",
+        cache_dir=tmp_path / "cache",
+        base="ubuntu@22.04",
+        arch="amd64",
+    )
+    part = Part("my-part", {"source": ".", "plugin": "colcon"}, project_dirs=dirs)
+    step_info = StepInfo(
+        part_info=PartInfo(project_info=project_info, part=part), step=Step.BUILD
     )
 
-    assert exit_code == 0
+    if environment is not None:
+        run_dir = part.part_run_dir
+        run_dir.mkdir(parents=True)
+        (run_dir / "environment.sh").write_text(
+            "# Environment\n"
+            + "".join(f'export {key}="{value}"\n' for key, value in environment.items())
+        )
+
+    return step_info
+
+
+def test_callback_stages_runtime_dependencies(monkeypatch, tmp_path):
+    staging = mock.Mock()
+    fix = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", fix)
+    step_info = _make_step_info(
+        tmp_path, environment={"ROS_DISTRO": "humble", "ROS_VERSION": "2"}
+    )
+
+    result = _ros.stage_runtime_dependencies_callback(step_info)
+
+    assert result is True
     staging.assert_called_once_with(
-        part_src="/part/src",
-        part_install="/part/install",
+        part_src=str(tmp_path / "parts/my-part/src"),
+        part_install=str(tmp_path / "parts/my-part/install"),
         ros_version="2",
         ros_distro="humble",
         target_arch="amd64",
-        stage_cache_dir="/cache",
+        stage_cache_dir=str((tmp_path / "cache").resolve()),
         base="ubuntu@22.04",
         packages=None,
     )
+    # The BLAS/LAPACK symlink fix runs after the staging.
+    fix.assert_called_once_with(part_install=str(tmp_path / "parts/my-part/install"))
 
 
-def test_main_invokes_staging_with_packages_filter(monkeypatch):
+def test_callback_packages_filter_and_default_ros_version(monkeypatch, tmp_path):
     staging = mock.Mock()
     monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", mock.Mock())
+    # ROS_VERSION is not set: the callback defaults to ROS 2.
+    step_info = _make_step_info(tmp_path, environment={"ROS_DISTRO": "jazzy"})
 
-    exit_code = _ros.main(
-        [
-            "--part-src",
-            "/part/src",
-            "--part-install",
-            "/part/install",
-            "--ros-version",
-            "2",
-            "--ros-distro",
-            "humble",
-            "--target-arch",
-            "amd64",
-            "--stage-cache-dir",
-            "/cache",
-            "--base",
-            "ubuntu@22.04",
-            "--packages",
-            "pkg_a",
-            "pkg_b",
-        ]
-    )
+    _ros.stage_runtime_dependencies_callback(step_info, packages=["demo_nodes_cpp"])
 
-    assert exit_code == 0
-    staging.assert_called_once_with(
-        part_src="/part/src",
-        part_install="/part/install",
-        ros_version="2",
-        ros_distro="humble",
-        target_arch="amd64",
-        stage_cache_dir="/cache",
-        base="ubuntu@22.04",
-        packages=["pkg_a", "pkg_b"],
-    )
+    assert staging.call_args.kwargs["packages"] == ["demo_nodes_cpp"]
+    assert staging.call_args.kwargs["ros_version"] == "2"
+    assert staging.call_args.kwargs["ros_distro"] == "jazzy"
 
 
-def test_main_surfaces_rockcraft_error_without_traceback(monkeypatch, caplog):
-    # A RockcraftError from staging must be reported as a clean message with a
-    # non-zero exit code, not propagated as a traceback.
+def test_callback_skips_when_ros_distro_unset(monkeypatch, tmp_path, caplog):
+    staging = mock.Mock()
+    fix = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", fix)
+    step_info = _make_step_info(tmp_path, environment={"ROS_VERSION": "2"})
+
+    with caplog.at_level("WARNING"):
+        result = _ros.stage_runtime_dependencies_callback(step_info)
+
+    assert result is True
+    staging.assert_not_called()
+    fix.assert_not_called()
+    assert "ROS_DISTRO is not set" in caplog.text
+
+
+def test_callback_skips_when_no_environment_file(monkeypatch, tmp_path, caplog):
+    staging = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    # No environment.sh written for the part.
+    step_info = _make_step_info(tmp_path)
+
+    with caplog.at_level("WARNING"):
+        result = _ros.stage_runtime_dependencies_callback(step_info)
+
+    assert result is True
+    staging.assert_not_called()
+    assert "ROS_DISTRO is not set" in caplog.text
+
+
+def test_callback_propagates_errors(monkeypatch, tmp_path):
+    # Errors raised by the staging propagate so that the build fails with a
+    # clean message (RockcraftError carries details/resolution).
     error = _ros.RosdepError(
         message="Failed to resolve the runtime dependency 'rclcpp'.",
         details="rosdep stderr: boom",
@@ -321,62 +349,51 @@ def test_main_surfaces_rockcraft_error_without_traceback(monkeypatch, caplog):
     monkeypatch.setattr(
         _ros, "stage_runtime_dependencies", mock.Mock(side_effect=error)
     )
+    step_info = _make_step_info(tmp_path, environment={"ROS_DISTRO": "humble"})
 
-    with caplog.at_level("ERROR"):
-        exit_code = _ros.main(
-            [
-                "--part-src",
-                "/part/src",
-                "--part-install",
-                "/part/install",
-                "--ros-version",
-                "2",
-                "--ros-distro",
-                "humble",
-                "--target-arch",
-                "amd64",
-                "--stage-cache-dir",
-                "/cache",
-                "--base",
-                "ubuntu@22.04",
-            ]
-        )
-
-    assert exit_code == 1
-    log_text = caplog.text
-    assert "Failed to resolve the runtime dependency 'rclcpp'." in log_text
-    assert "rosdep stderr: boom" in log_text
-    assert "Add the matching ros2-* extension." in log_text
+    with pytest.raises(_ros.RosdepError, match="Failed to resolve"):
+        _ros.stage_runtime_dependencies_callback(step_info)
 
 
-def test_main_does_not_swallow_unexpected_errors(monkeypatch):
-    # Genuinely unexpected (non-RockcraftError) failures must still propagate so
-    # they are not silently turned into a clean exit.
-    monkeypatch.setattr(
-        _ros,
-        "stage_runtime_dependencies",
-        mock.Mock(side_effect=RuntimeError("unexpected")),
-    )
+def test_callback_restores_blas_lapack_symlinks(monkeypatch, tmp_path):
+    # The callback recreates the BLAS/LAPACK SONAME symlinks after staging
+    # (staging unpacks packages without running maintainer scripts).
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", mock.Mock())
+    install_dir = tmp_path / "parts/my-part/install"
+    provider_dir = install_dir / "usr/lib/x86_64-linux-gnu/blas"
+    provider_dir.mkdir(parents=True)
+    (provider_dir / "libblas.so.3").touch()
+    step_info = _make_step_info(tmp_path, environment={"ROS_DISTRO": "humble"})
 
-    with pytest.raises(RuntimeError, match="unexpected"):
-        _ros.main(
-            [
-                "--part-src",
-                "/part/src",
-                "--part-install",
-                "/part/install",
-                "--ros-version",
-                "2",
-                "--ros-distro",
-                "humble",
-                "--target-arch",
-                "amd64",
-                "--stage-cache-dir",
-                "/cache",
-                "--base",
-                "ubuntu@22.04",
-            ]
-        )
+    _ros.stage_runtime_dependencies_callback(step_info)
+
+    soname_link = install_dir / "usr/lib/x86_64-linux-gnu/libblas.so.3"
+    assert soname_link.is_symlink()
+    assert soname_link.readlink() == pathlib.Path("blas/libblas.so.3")
+
+
+def test_fix_library_alternatives_keeps_existing_files(tmp_path):
+    install_dir = tmp_path / "install"
+    provider_dir = install_dir / "usr/lib/x86_64-linux-gnu/lapack"
+    provider_dir.mkdir(parents=True)
+    (provider_dir / "liblapack.so.3").touch()
+    existing = install_dir / "usr/lib/x86_64-linux-gnu/liblapack.so.3"
+    existing.touch()
+
+    _ros._fix_library_alternatives(part_install=str(install_dir))
+
+    # An existing canonical file/symlink is left untouched.
+    assert not existing.is_symlink()
+
+
+def test_fix_library_alternatives_no_libraries(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+
+    # Nothing staged: no-op, no error.
+    _ros._fix_library_alternatives(part_install=str(install_dir))
+
+    assert list(install_dir.iterdir()) == []
 
 
 def test_resolve_apt_dependencies_respects_packages_filter(monkeypatch):

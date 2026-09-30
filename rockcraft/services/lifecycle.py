@@ -22,11 +22,14 @@ from typing import cast
 
 import craft_platforms
 from craft_application import LifecycleService
+from craft_parts import callbacks
 from craft_parts.infos import StepInfo
 from craft_parts.plugins import Plugin
+from craft_parts.steps import Step
 from typing_extensions import override
 
 from rockcraft import layers, plugins
+from rockcraft.plugins import _ros
 from rockcraft.plugins.python_common import get_python_plugins
 
 
@@ -65,6 +68,17 @@ class RockcraftLifecycleService(LifecycleService):
         )
         super().setup()
 
+        # Stage the ROS 2 runtime dependencies of colcon parts. The runtime
+        # dependencies are resolved with rosdep from the workspace's
+        # package.xml files, so this can only run once the workspace has been
+        # pulled and built: the PRE_ORGANIZE hook runs in the build environment
+        # right after the part's build script completed.
+        callbacks.register_step(
+            self._stage_ros_runtime_dependencies,
+            step_list=[Step.BUILD],
+            hook_point=callbacks.HookPoint.PRE_ORGANIZE,
+        )
+
     @override
     def post_prime(self, step_info: StepInfo) -> bool:
         """Perform base-layer pruning on primed files."""
@@ -81,6 +95,29 @@ class RockcraftLifecycleService(LifecycleService):
         _python_v2_shebang_fix(step_info)
 
         return True
+
+    def _stage_ros_runtime_dependencies(self, step_info: StepInfo) -> bool:
+        """Stage the ROS 2 runtime dependencies of colcon parts.
+
+        Callback registered for the ``PRE_ORGANIZE`` hook of the build step;
+        the staging itself is performed by
+        :func:`rockcraft.plugins._ros.stage_runtime_dependencies_callback`.
+
+        The ``colcon-packages`` selection (if any) is read from the part's
+        properties, which are not reachable through ``StepInfo``.
+        """
+        if step_info.plugin_name != "colcon":
+            return True
+
+        project = self._services.get("project").get()
+        part_properties = project.parts.get(step_info.part_name, {})
+        packages = (
+            part_properties.get("colcon-packages")
+            or part_properties.get("colcon_packages")
+            or None
+        )
+
+        return _ros.stage_runtime_dependencies_callback(step_info, packages=packages)
 
     @override
     @staticmethod
