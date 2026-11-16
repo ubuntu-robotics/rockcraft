@@ -418,3 +418,5 @@ explicit = true
 
 [tool.uv.sources]
 python-apt = { index = "python-apt-wheels" }
+# Temporary: requires craft-parts#1749.
+craft-parts = { git = "https://github.com/canonical/craft-parts", branch = "main" }
