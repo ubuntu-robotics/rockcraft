@@ -161,6 +161,17 @@ class Extension(abc.ABC):
                 f"Format is <extension-name>{self._extension_name_sep}<part-name>"
             )
 
+        self._validate_extras()
+
+    def _validate_extras(self) -> None:  # noqa: B027
+        """Perform extension-specific validation.
+
+        Hook called at the end of :meth:`validate`. Subclasses may override it
+        to check cross-field consistency (e.g. ``base`` vs ``build-base``).
+        The full, unprocessed project mapping is available as
+        ``self.yaml_data``.
+        """
+
 
 class _FrameworkFactory:
     """Route to V1 or V2 extension based on project base."""
