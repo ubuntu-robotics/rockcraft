@@ -329,6 +329,44 @@ def test_get_build_commands_rosdep_respects_colcon_packages(base, tmp_path):
     # the selected packages' directories.
     assert "--packages-select demo_nodes_cpp" in rosdep_install
     assert "--paths-only" in rosdep_install
+    assert "--packages-ignore" not in rosdep_install
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
+@pytest.mark.parametrize(
+    ("properties", "expected_selection"),
+    [
+        pytest.param(
+            {"colcon-packages-ignore": ["unused_pkg", "other_pkg"]},
+            "--packages-ignore unused_pkg other_pkg",
+            id="ignore-only",
+        ),
+        pytest.param(
+            {
+                "colcon-packages": ["demo_nodes_cpp"],
+                "colcon-packages-ignore": ["unused_pkg"],
+            },
+            "--packages-select demo_nodes_cpp --packages-ignore unused_pkg",
+            id="select-and-ignore",
+        ),
+    ],
+)
+def test_get_build_commands_rosdep_respects_colcon_packages_ignore(
+    base, tmp_path, properties, expected_selection
+):
+    # rosdep install must not process packages that colcon does not build, so
+    # colcon-packages-ignore scopes its discovery just like colcon-packages.
+    plugin = create_plugin(base, tmp_path, **properties)
+
+    rosdep_install = next(
+        line
+        for line in plugin.get_build_commands()
+        if line.startswith("rosdep install")
+    )
+
+    assert '--from-paths "${CRAFT_PART_SRC_WORK}"' not in rosdep_install
+    assert f"colcon --log-base /dev/null list {expected_selection} " in rosdep_install
+    assert "--paths-only" in rosdep_install
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
@@ -347,26 +385,58 @@ def test_get_build_commands_rosdep_no_filter_without_colcon_packages(base, tmp_p
 
 
 @pytest.mark.parametrize(
-    ("part_properties", "expected_packages"),
+    ("part_properties", "expected_colcon_packages", "expected_colcon_packages_ignore"),
     [
         pytest.param(
             {"colcon-packages": ["demo_nodes_cpp"]},
             ["demo_nodes_cpp"],
+            None,
             id="colcon-packages",
         ),
         pytest.param(
             {"colcon_packages": ["demo_nodes_py"]},
             ["demo_nodes_py"],
+            None,
             id="underscored-colcon-packages",
         ),
-        pytest.param({"colcon-packages": []}, None, id="empty-selection"),
-        pytest.param({}, None, id="no-selection"),
+        pytest.param(
+            {"colcon-packages-ignore": ["unused_pkg"]},
+            None,
+            ["unused_pkg"],
+            id="colcon-packages-ignore",
+        ),
+        pytest.param(
+            {"colcon_packages_ignore": ["unused_pkg"]},
+            None,
+            ["unused_pkg"],
+            id="underscored-colcon-packages-ignore",
+        ),
+        pytest.param(
+            {
+                "colcon-packages": ["demo_nodes_cpp"],
+                "colcon-packages-ignore": ["unused_pkg"],
+            },
+            ["demo_nodes_cpp"],
+            ["unused_pkg"],
+            id="select-and-ignore",
+        ),
+        pytest.param(
+            {"colcon-packages": [], "colcon-packages-ignore": []},
+            None,
+            None,
+            id="empty-selections",
+        ),
+        pytest.param({}, None, None, id="no-selection"),
     ],
 )
 def test_post_build_stages_runtime_dependencies(
-    mocker, part_properties, expected_packages
+    mocker,
+    part_properties,
+    expected_colcon_packages,
+    expected_colcon_packages_ignore,
 ):
-    # The staging is scoped to the colcon-packages selection, if any.
+    # The staging is scoped to the colcon-packages and colcon-packages-ignore
+    # selections, if any.
     stage = mocker.patch(
         "rockcraft.plugins.colcon_plugin._ros.stage_runtime_dependencies_callback"
     )
@@ -375,4 +445,8 @@ def test_post_build_stages_runtime_dependencies(
     result = ColconPlugin.post_build(step_info, part_properties)
 
     assert result is stage.return_value
-    stage.assert_called_once_with(step_info, packages=expected_packages)
+    stage.assert_called_once_with(
+        step_info,
+        colcon_packages=expected_colcon_packages,
+        colcon_packages_ignore=expected_colcon_packages_ignore,
+    )

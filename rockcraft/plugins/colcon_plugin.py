@@ -113,15 +113,24 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
         """Stage the ROS 2 runtime dependencies once the workspace is built.
 
         Run by the lifecycle service right after the build script, in the build
-        environment. Staging is scoped to the part's ``colcon-packages``
-        selection, if any.
+        environment. Staging is scoped to the part's ``colcon-packages`` and
+        ``colcon-packages-ignore`` selections, if any.
         """
-        packages = (
+        colcon_packages = (
             part_properties.get("colcon-packages")
             or part_properties.get("colcon_packages")
             or None
         )
-        return _ros.stage_runtime_dependencies_callback(step_info, packages=packages)
+        colcon_packages_ignore = (
+            part_properties.get("colcon-packages-ignore")
+            or part_properties.get("colcon_packages_ignore")
+            or None
+        )
+        return _ros.stage_runtime_dependencies_callback(
+            step_info,
+            colcon_packages=colcon_packages,
+            colcon_packages_ignore=colcon_packages_ignore,
+        )
 
     @override
     def _get_install_path(self) -> pathlib.Path:
@@ -220,22 +229,32 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             "fi",
             # Resolve and install only the build-time dependencies declared in
             # the package.xml files found under the part's source directory.
-            # If colcon-packages is set, limit to only those packages' dirs.
+            # If colcon-packages and/or colcon-packages-ignore are set, limit to
+            # the packages that are built.
             self._get_rosdep_install_command(),
             "",
         ]
 
     def _get_rosdep_install_command(self) -> str:
-        """Return the ``rosdep install`` command, scoped to ``colcon-packages`` if set."""
+        """Return the ``rosdep install`` command, scoped like the colcon build.
+
+        The ``colcon-packages`` and ``colcon-packages-ignore`` selections, if
+        any, limit the packages rosdep processes to the ones that are built.
+        """
         options = cast(colcon_plugin.ColconPluginProperties, self._options)
+        selection: list[str] = []
         if options.colcon_packages:
+            selection += ["--packages-select", *options.colcon_packages]
+        if options.colcon_packages_ignore:
+            selection += ["--packages-ignore", *options.colcon_packages_ignore]
+
+        if selection:
             # Use colcon list (from python3-colcon-package-information) to discover
-            # only the selected packages' directories so that rosdep doesn't
+            # only the built packages' directories so that rosdep doesn't
             # process unrelated packages in the source tree.
-            packages_select = " ".join(options.colcon_packages)
             from_paths = (
                 "$(colcon --log-base /dev/null list"
-                f" --packages-select {packages_select}"
+                f" {' '.join(selection)}"
                 ' --paths-only --base-paths "${CRAFT_PART_SRC_WORK}")'
             )
         else:

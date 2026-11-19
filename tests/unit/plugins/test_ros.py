@@ -444,7 +444,8 @@ def test_callback_stages_runtime_dependencies(monkeypatch, tmp_path):
         target_arch="amd64",
         stage_cache_dir=str((tmp_path / "cache").resolve()),
         base="ubuntu@22.04",
-        packages=None,
+        colcon_packages=None,
+        colcon_packages_ignore=None,
     )
     # The BLAS/LAPACK symlink fix runs after the staging.
     fix.assert_called_once_with(part_install=str(tmp_path / "parts/my-part/install"))
@@ -457,9 +458,24 @@ def test_callback_packages_filter_and_default_ros_version(monkeypatch, tmp_path)
     # ROS_VERSION is not set: the callback defaults to ROS 2.
     step_info = _make_step_info(tmp_path, environment={"ROS_DISTRO": "jazzy"})
 
-    _ros.stage_runtime_dependencies_callback(step_info, packages=["demo_nodes_cpp"])
+    _ros.stage_runtime_dependencies_callback(
+        step_info, colcon_packages=["demo_nodes_cpp"]
+    )
 
-    assert staging.call_args.kwargs["packages"] == ["demo_nodes_cpp"]
+    assert staging.call_args.kwargs["colcon_packages"] == ["demo_nodes_cpp"]
+
+
+def test_callback_forwards_colcon_packages_ignore(monkeypatch, tmp_path):
+    staging = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", mock.Mock())
+    step_info = _make_step_info(tmp_path, environment={"ROS_DISTRO": "jazzy"})
+
+    _ros.stage_runtime_dependencies_callback(
+        step_info, colcon_packages_ignore=["unused_pkg"]
+    )
+
+    assert staging.call_args.kwargs["colcon_packages_ignore"] == ["unused_pkg"]
     assert staging.call_args.kwargs["ros_version"] == "2"
     assert staging.call_args.kwargs["ros_distro"] == "jazzy"
 
@@ -592,7 +608,7 @@ def test_resolve_apt_dependencies_respects_packages_filter(monkeypatch):
         part_install="/part/install",
         ros_version="2",
         ros_distro="humble",
-        packages=["selected_pkg"],
+        colcon_packages=["selected_pkg"],
     )
 
     assert result == {"ros-humble-rclcpp"}
@@ -601,6 +617,66 @@ def test_resolve_apt_dependencies_respects_packages_filter(monkeypatch):
     assert run_mock.call_count == 1
     cmd_args = run_mock.call_args[0][0]
     assert "rclcpp" in cmd_args
+
+
+def test_resolve_apt_dependencies_skips_colcon_packages_ignore(monkeypatch):
+    # The dependencies of packages listed in 'colcon_packages_ignore' (which
+    # colcon
+    # does not build) are neither resolved nor staged.
+    built_pkg = _make_pkg("built_pkg", [_make_dep("rclcpp")])
+    ignored_pkg = _make_pkg("ignored_pkg", [_make_dep("libfoo")])
+
+    monkeypatch.setattr(
+        _ros.catkin_packages,
+        "find_packages",
+        lambda path: (
+            {"built_pkg": built_pkg, "ignored_pkg": ignored_pkg}
+            if "src" in path
+            else {}
+        ),
+    )
+
+    run_result = mock.Mock()
+    run_result.stdout = b"#apt\nros-humble-rclcpp"
+    run_mock = mock.Mock(return_value=run_result)
+    monkeypatch.setattr(_ros.subprocess, "run", run_mock)
+
+    result = _ros._resolve_apt_dependencies(
+        part_src="/part/src",
+        part_install="/part/install",
+        ros_version="2",
+        ros_distro="humble",
+        colcon_packages_ignore=["ignored_pkg"],
+    )
+
+    assert result == {"ros-humble-rclcpp"}
+    run_mock.assert_called_once()
+    assert "libfoo" not in run_mock.call_args[0][0]
+    ignored_pkg.evaluate_conditions.assert_not_called()
+
+
+def test_resolve_apt_dependencies_ignore_wins_over_selection(monkeypatch):
+    # A package that is both selected and ignored is not built by colcon.
+    pkg = _make_pkg("my_pkg", [_make_dep("rclcpp")])
+    monkeypatch.setattr(
+        _ros.catkin_packages,
+        "find_packages",
+        lambda path: {"my_pkg": pkg} if "src" in path else {},
+    )
+    run_mock = mock.Mock()
+    monkeypatch.setattr(_ros.subprocess, "run", run_mock)
+
+    result = _ros._resolve_apt_dependencies(
+        part_src="/part/src",
+        part_install="/part/install",
+        ros_version="2",
+        ros_distro="humble",
+        colcon_packages=["my_pkg"],
+        colcon_packages_ignore=["my_pkg"],
+    )
+
+    assert result == set()
+    run_mock.assert_not_called()
 
 
 def test_resolve_apt_dependencies_no_filter_processes_all(monkeypatch):

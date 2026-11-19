@@ -148,7 +148,8 @@ def _resolve_apt_dependencies(
     part_install: str,
     ros_version: str,
     ros_distro: str,
-    packages: list[str] | None = None,
+    colcon_packages: list[str] | None = None,
+    colcon_packages_ignore: list[str] | None = None,
 ) -> set[str]:
     """Resolve the runtime apt dependencies of the workspace with rosdep.
 
@@ -157,8 +158,10 @@ def _resolve_apt_dependencies(
     Dependencies that are provided by another package in the workspace itself
     (i.e. already present under ``part_install``) are skipped.
 
-    If *packages* is given, only packages whose name appears in that list are
-    processed (mirrors the ``colcon-packages`` selection used at build time).
+    If *colcon_packages* is given, only packages whose name appears in that list
+    are processed (mirrors the ``colcon-packages`` selection used at build
+    time). Packages listed in *colcon_packages_ignore* are never processed
+    (mirrors ``colcon-packages-ignore``).
     """
     apt_packages: set[str] = set()
 
@@ -169,7 +172,9 @@ def _resolve_apt_dependencies(
     # (a subprocess call) only once, however many packages depend on it.
     dependency_names: set[str] = set()
     for pkg in catkin_packages.find_packages(part_src).values():
-        if packages is not None and pkg.name not in packages:
+        if colcon_packages is not None and pkg.name not in colcon_packages:
+            continue
+        if colcon_packages_ignore and pkg.name in colcon_packages_ignore:
             continue
         # Evaluate the conditions of all dependencies.
         pkg.evaluate_conditions(
@@ -239,7 +244,7 @@ def _resolve_apt_dependencies(
     return apt_packages
 
 
-def stage_runtime_dependencies(
+def stage_runtime_dependencies(  # noqa: PLR0913 (too many arguments)
     *,
     part_src: str,
     part_install: str,
@@ -248,7 +253,8 @@ def stage_runtime_dependencies(
     target_arch: str,
     stage_cache_dir: str,
     base: str,
-    packages: list[str] | None = None,
+    colcon_packages: list[str] | None = None,
+    colcon_packages_ignore: list[str] | None = None,
 ) -> None:
     """Stage the runtime dependencies of the ROS workspace using rosdep."""
     logger.info("Staging runtime dependencies...")
@@ -258,7 +264,8 @@ def stage_runtime_dependencies(
         part_install=part_install,
         ros_version=ros_version,
         ros_distro=ros_distro,
-        packages=packages,
+        colcon_packages=colcon_packages,
+        colcon_packages_ignore=colcon_packages_ignore,
     )
 
     if not apt_packages:
@@ -287,7 +294,10 @@ def stage_runtime_dependencies(
 
 
 def stage_runtime_dependencies_callback(
-    step_info: StepInfo, *, packages: list[str] | None = None
+    step_info: StepInfo,
+    *,
+    colcon_packages: list[str] | None = None,
+    colcon_packages_ignore: list[str] | None = None,
 ) -> bool:
     """Stage the ROS 2 runtime dependencies of a colcon part.
 
@@ -307,8 +317,10 @@ def stage_runtime_dependencies_callback(
     dependencies without a ROS distribution.
 
     :param step_info: The step information passed by craft-parts.
-    :param packages: Limit staging to these ROS package names (mirrors the
-        ``colcon-packages`` selection used at build time).
+    :param colcon_packages: Limit staging to these ROS package names (mirrors
+        the ``colcon-packages`` selection used at build time).
+    :param colcon_packages_ignore: Do not stage the dependencies of these ROS
+        package names (mirrors ``colcon-packages-ignore``).
     :return: True, per the step callback convention.
     """
     environment = _read_step_environment(step_info)
@@ -329,7 +341,8 @@ def stage_runtime_dependencies_callback(
         target_arch=step_info.target_arch,
         stage_cache_dir=str(step_info.cache_dir),
         base=str(step_info.project_info.base),
-        packages=packages,
+        colcon_packages=colcon_packages,
+        colcon_packages_ignore=colcon_packages_ignore,
     )
 
     _fix_library_alternatives(part_install=str(step_info.part_install_dir))
