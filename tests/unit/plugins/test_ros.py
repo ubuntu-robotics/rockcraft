@@ -108,9 +108,9 @@ def test_resolve_apt_dependencies_resolves_exec_depends(monkeypatch):
     )
 
 
-def test_resolve_apt_dependencies_resolves_each_dependency_once(monkeypatch):
-    # Dependencies shared by several packages are resolved with a single rosdep
-    # call, each in a stable (sorted) order.
+def test_resolve_apt_dependencies_resolves_all_dependencies_in_one_call(monkeypatch):
+    # Dependencies shared by several packages are resolved once, and all the
+    # unique keys go in a single rosdep call (sorted, for a stable command).
     pkg_a = _make_pkg("pkg_a", [_make_dep("rclcpp"), _make_dep("std_msgs")])
     pkg_b = _make_pkg("pkg_b", [_make_dep("std_msgs"), _make_dep("rclcpp")])
 
@@ -120,12 +120,12 @@ def test_resolve_apt_dependencies_resolves_each_dependency_once(monkeypatch):
         lambda path: {"pkg_a": pkg_a, "pkg_b": pkg_b} if "src" in path else {},
     )
 
-    def fake_run(cmd, **kwargs):
-        result = mock.Mock()
-        result.stdout = f"#apt\nros-humble-{cmd[2]}".encode()
-        return result
-
-    run = mock.Mock(side_effect=fake_run)
+    run_result = mock.Mock()
+    run_result.stdout = (
+        b"#ROSDEP[rclcpp]\n#apt\nros-humble-rclcpp\n"
+        b"#ROSDEP[std_msgs]\n#apt\nros-humble-std-msgs\n"
+    )
+    run = mock.Mock(return_value=run_result)
     monkeypatch.setattr(_ros.subprocess, "run", run)
 
     packages = _ros._resolve_apt_dependencies(
@@ -135,8 +135,102 @@ def test_resolve_apt_dependencies_resolves_each_dependency_once(monkeypatch):
         ros_distro="humble",
     )
 
-    assert packages == {"ros-humble-rclcpp", "ros-humble-std_msgs"}
-    assert [call.args[0][2] for call in run.call_args_list] == ["rclcpp", "std_msgs"]
+    assert packages == {"ros-humble-rclcpp", "ros-humble-std-msgs"}
+    run.assert_called_once()
+    assert run.call_args.args[0] == [
+        "rosdep",
+        "resolve",
+        "rclcpp",
+        "std_msgs",
+        "--rosdistro",
+        "humble",
+    ]
+
+
+def test_resolve_apt_dependencies_no_dependencies_no_rosdep_call(monkeypatch):
+    pkg = _make_pkg("my_pkg", [])
+    monkeypatch.setattr(
+        _ros.catkin_packages,
+        "find_packages",
+        lambda path: {"my_pkg": pkg} if "src" in path else {},
+    )
+    run = mock.Mock()
+    monkeypatch.setattr(_ros.subprocess, "run", run)
+
+    packages = _ros._resolve_apt_dependencies(
+        part_src="/part/src",
+        part_install="/part/install",
+        ros_version="2",
+        ros_distro="humble",
+    )
+
+    assert packages == set()
+    run.assert_not_called()
+
+
+def test_resolve_apt_dependencies_batch_failure_names_failed_keys(monkeypatch):
+    pkg = _make_pkg("my_pkg", [_make_dep("rclcpp"), _make_dep("not_a_key")])
+    monkeypatch.setattr(
+        _ros.catkin_packages,
+        "find_packages",
+        lambda path: {"my_pkg": pkg} if "src" in path else {},
+    )
+    # rosdep reports the keys it could resolve; the failed one has no section
+    # content.
+    error = subprocess.CalledProcessError(
+        1,
+        ["rosdep"],
+        output=b"#ROSDEP[not_a_key]\n#ROSDEP[rclcpp]\n#apt\nros-humble-rclcpp\n",
+        stderr=b"ERROR: no rosdep rule for 'not_a_key'",
+    )
+    monkeypatch.setattr(_ros.subprocess, "run", mock.Mock(side_effect=error))
+
+    with pytest.raises(_ros.RosdepError) as raised:
+        _ros._resolve_apt_dependencies(
+            part_src="/part/src",
+            part_install="/part/install",
+            ros_version="2",
+            ros_distro="humble",
+        )
+
+    assert "['not_a_key']" in str(raised.value)
+    assert "rclcpp" not in str(raised.value)
+    assert raised.value.details is not None
+    assert "no rosdep rule for 'not_a_key'" in raised.value.details
+
+
+@pytest.mark.parametrize(
+    ("names", "output", "expected"),
+    [
+        pytest.param(
+            ["a", "b"],
+            "#ROSDEP[a]\n#apt\npkg-a\n#ROSDEP[b]\n#apt\npkg-b\n#pip\npip-b",
+            {"a": {"apt": {"pkg-a"}}, "b": {"apt": {"pkg-b"}, "pip": {"pip-b"}}},
+            id="several-keys",
+        ),
+        pytest.param(
+            ["a", "b"],
+            "#ROSDEP[a]\n#ROSDEP[b]\n#apt\npkg-b",
+            {"a": {}, "b": {"apt": {"pkg-b"}}},
+            id="unresolved-key-has-an-empty-section",
+        ),
+        pytest.param(
+            ["a"],
+            "#apt\npkg-a",
+            {"a": {"apt": {"pkg-a"}}},
+            id="single-key-has-no-header",
+        ),
+        pytest.param(["a", "b"], "", {}, id="empty-output"),
+    ],
+)
+def test_parse_rosdep_resolve_batch(names, output, expected):
+    assert _ros._parse_rosdep_resolve_batch(names, output) == expected
+
+
+def test_parse_rosdep_resolve_batch_unexpected_result():
+    # Without headers, the output cannot be attributed to a key.
+    with pytest.raises(_ros.RosdepUnexpectedResultError):
+        _ros._parse_rosdep_resolve_batch(["a", "b"], "#apt\npkg")
 
 
 def test_resolve_apt_dependencies_warns_on_non_apt_dependencies(monkeypatch, caplog):
@@ -521,7 +615,7 @@ def test_resolve_apt_dependencies_no_filter_processes_all(monkeypatch):
     )
 
     run_result = mock.Mock()
-    run_result.stdout = b"#apt\nsome-pkg"
+    run_result.stdout = b"#ROSDEP[libfoo]\n#apt\nsome-pkg\n#ROSDEP[rclcpp]\n#apt\nother"
     run_mock = mock.Mock(return_value=run_result)
     monkeypatch.setattr(_ros.subprocess, "run", run_mock)
 
@@ -532,5 +626,8 @@ def test_resolve_apt_dependencies_no_filter_processes_all(monkeypatch):
         ros_distro="humble",
     )
 
-    # Both packages processed → two rosdep resolve calls.
-    assert run_mock.call_count == 2
+    # Both packages processed: their dependencies share one rosdep call.
+    run_mock.assert_called_once()
+    cmd_args = run_mock.call_args[0][0]
+    assert "rclcpp" in cmd_args
+    assert "libfoo" in cmd_args

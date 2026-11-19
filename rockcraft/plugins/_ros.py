@@ -43,6 +43,8 @@ from rockcraft.errors import RockcraftError
 
 logger = logging.getLogger(__name__)
 
+_ROSDEP_KEY_HEADER = re.compile(r"#ROSDEP\[(.+)\]")
+
 
 class RosdepError(RockcraftError):
     """Base class for rosdep errors."""
@@ -97,6 +99,48 @@ def _parse_rosdep_resolve_dependencies(
     return dependencies
 
 
+def _parse_rosdep_resolve_batch(
+    dependency_names: list[str], output: str
+) -> dict[str, dict[str, set[str]]]:
+    """Parse the output of ``rosdep resolve`` called with several keys.
+
+    With more than one key, ``rosdep resolve`` prefixes the result of each key
+    with a ``#ROSDEP[<key>]`` line::
+
+        # ROSDEP[key1]
+        # apt
+        package1
+        # ROSDEP[key2]
+        # apt
+        package2
+
+    A key that rosdep fails to resolve has an empty section. With a single key
+    there is no such prefix, and the whole output belongs to that key.
+
+    The result maps each key to its installer -> packages mapping, as returned
+    by :func:`_parse_rosdep_resolve_dependencies`.
+    """
+    sections: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in output.splitlines():
+        header = _ROSDEP_KEY_HEADER.fullmatch(line.strip())
+        if header:
+            current = sections.setdefault(header.group(1), [])
+        elif current is not None:
+            current.append(line)
+        elif line.strip():
+            if len(dependency_names) != 1:
+                raise RosdepUnexpectedResultError(", ".join(dependency_names), output)
+            # A lone key is reported without a header.
+            current = sections.setdefault(dependency_names[0], [])
+            current.append(line)
+
+    return {
+        key: _parse_rosdep_resolve_dependencies(key, "\n".join(lines))
+        for key, lines in sections.items()
+    }
+
+
 def _resolve_apt_dependencies(
     *,
     part_src: str,
@@ -142,41 +186,54 @@ def _resolve_apt_dependencies(
             if dep.name not in installed_names:
                 dependency_names.add(dep.name)
 
-    for dependency_name in sorted(dependency_names):
-        cmd = ["rosdep", "resolve", dependency_name, "--rosdistro", ros_distro]
-        logger.info("Running %r", cmd)
-        try:
-            proc = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as error:
-            raise RosdepError(
-                message=(
-                    f"Failed to resolve the runtime dependency {dependency_name!r} "
-                    f"for ROS distro {ros_distro!r}."
-                ),
-                details=(
-                    f"rosdep stdout: {error.stdout.decode().strip()}\n"
-                    f"rosdep stderr: {error.stderr.decode().strip()}"
-                ),
-                resolution=(
-                    f"Ensure {dependency_name!r} is declared correctly in the "
-                    "package.xml and is published in rosdistro for "
-                    f"{ros_distro!r}. If it is a system package, check that "
-                    "the ROS 2 apt repository is configured (e.g. by adding "
-                    "the matching ros2-* extension)."
-                ),
-            ) from error
+    if not dependency_names:
+        return apt_packages
 
-        parsed = _parse_rosdep_resolve_dependencies(
-            dependency_name, proc.stdout.decode().strip()
+    # A single rosdep call resolves all the keys: each call has a significant
+    # start-up cost, which adds up quickly with one call per dependency.
+    names = sorted(dependency_names)
+    cmd = ["rosdep", "resolve", *names, "--rosdistro", ros_distro]
+    logger.info("Running %r", cmd)
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
         )
+    except subprocess.CalledProcessError as error:
+        stdout = error.stdout.decode().strip()
+        # rosdep still reports the keys it could resolve: the failed ones are
+        # those left without any result.
+        try:
+            resolved = _parse_rosdep_resolve_batch(names, stdout)
+        except RosdepUnexpectedResultError:
+            resolved = {}
+        failed = [name for name in names if not resolved.get(name)] or names
+        raise RosdepError(
+            message=(
+                f"Failed to resolve the runtime dependencies {failed!r} "
+                f"for ROS distro {ros_distro!r}."
+            ),
+            details=(
+                f"rosdep stdout: {stdout}\n"
+                f"rosdep stderr: {error.stderr.decode().strip()}"
+            ),
+            resolution=(
+                f"Ensure {failed!r} are declared correctly in the "
+                "package.xml and are published in rosdistro for "
+                f"{ros_distro!r}. If they are system packages, check that "
+                "the ROS 2 apt repository is configured (e.g. by adding "
+                "the matching ros2-* extension)."
+            ),
+        ) from error
+
+    resolved = _parse_rosdep_resolve_batch(names, proc.stdout.decode().strip())
+    for name in names:
+        parsed = resolved.get(name, {})
         apt_packages |= parsed.pop("apt", set())
 
         if parsed:  # still non-empty after removing apt packages
-            logger.warning("Unhandled non-apt dependencies: %r", parsed)
+            logger.warning("Unhandled non-apt dependencies of %r: %r", name, parsed)
 
     return apt_packages
 
