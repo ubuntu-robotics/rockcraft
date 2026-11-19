@@ -259,6 +259,23 @@ def test_get_build_commands_relocates_install_prefix(base, tmp_path):
 
 
 @pytest.mark.parametrize("base", ALL_BASES)
+def test_get_build_commands_removes_colcon_ignore_marker(base, tmp_path):
+    # catkin skips directories with a COLCON_IGNORE marker, which would hide
+    # the workspace's own packages from the runtime dependency staging.
+    plugin = create_plugin(base, tmp_path)
+
+    commands = plugin.get_build_commands()
+
+    part_install = plugin._part_info.part_install_dir
+    colcon_build = next(i for i, line in enumerate(commands) if "colcon build" in line)
+    remove = next(i for i, line in enumerate(commands) if "COLCON_IGNORE" in line)
+
+    assert colcon_build < remove
+    # rm -f: the marker does not exist when no package is built.
+    assert commands[remove] == f'rm -f "{part_install}/opt/ros/overlay/COLCON_IGNORE"'
+
+
+@pytest.mark.parametrize("base", ALL_BASES)
 def test_get_build_commands_rosdep_build_dependencies_only(base, tmp_path):
     # rosdep must only install build-time dependency types, leaving runtime
     # dependencies to be handled explicitly via stage-packages.

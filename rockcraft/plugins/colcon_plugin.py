@@ -98,6 +98,7 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             self._get_ros_distro_check_commands()
             + self._get_rosdep_commands()
             + super().get_build_commands()
+            + self._get_remove_colcon_ignore_commands()
             + self._get_relocate_commands()
         )
 
@@ -122,6 +123,24 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             ),
             "exit 1",
             "fi",
+            "",
+        ]
+
+    def _get_remove_colcon_ignore_commands(self) -> list[str]:
+        """Return the commands that remove colcon's ``COLCON_IGNORE`` marker.
+
+        Colcon creates the marker at the root of the install base, which makes
+        catkin skip it when crawling for packages. The runtime dependency
+        staging crawls the part's install directory to tell which dependencies
+        are provided by the workspace itself, so the marker must not hide the
+        packages that were just built.
+        """
+        install_path = self._get_install_path().as_posix()
+        return [
+            "##[rockcraft.colcon] Removing the colcon ignore marker",
+            # -f: nothing is installed (and no marker created) if no package
+            # is built.
+            f'rm -f "{install_path}/COLCON_IGNORE"',
             "",
         ]
 
