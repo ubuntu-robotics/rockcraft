@@ -348,10 +348,10 @@ def _create_build_step_info(tmp_path, part_name, plugin_name) -> StepInfo:
 
 
 @pytest.mark.usefixtures("configured_project")
-def test_lifecycle_registers_ros_staging_callback(
+def test_lifecycle_registers_plugin_post_build_callback(
     default_image_info, mocker, fake_services
 ):
-    """The ROS 2 runtime dependency staging runs as a PRE_ORGANIZE callback."""
+    """The plugins' post_build hook runs as a PRE_ORGANIZE callback."""
     mocker.patch.object(
         fake_services.get("image"), "obtain_image", return_value=default_image_info
     )
@@ -361,31 +361,35 @@ def test_lifecycle_registers_ros_staging_callback(
     lifecycle_service = fake_services.get("lifecycle")
 
     mock_register_step.assert_any_call(
-        lifecycle_service._stage_ros_runtime_dependencies,
+        lifecycle_service._run_plugin_post_build,
         step_list=[Step.BUILD],
         hook_point=callbacks.HookPoint.PRE_ORGANIZE,
     )
 
 
 @pytest.mark.usefixtures("configured_project")
-def test_stage_ros_runtime_dependencies_ignores_non_colcon_parts(
-    default_image_info, mocker, fake_services, tmp_path
+@pytest.mark.parametrize(
+    "registered_plugins",
+    [
+        pytest.param({"plain": type("PlainPlugin", (), {})}, id="no-hook"),
+        pytest.param({}, id="unregistered-plugin"),
+    ],
+)
+def test_run_plugin_post_build_without_hook(
+    default_image_info, mocker, fake_services, tmp_path, registered_plugins
 ):
-    """The staging callback is a no-op for parts not using the colcon plugin."""
+    """Plugins that do not define post_build are skipped."""
     mocker.patch.object(
         fake_services.get("image"), "obtain_image", return_value=default_image_info
     )
     mocker.patch.object(LifecycleManager, "__init__", return_value=None)
-    mock_callback = mocker.patch.object(
-        lifecycle_module._ros, "stage_runtime_dependencies_callback"
+    mocker.patch.object(
+        lifecycle_module, "get_registered_plugins", return_value=registered_plugins
     )
     lifecycle_service = fake_services.get("lifecycle")
-    step_info = _create_build_step_info(tmp_path, "p1", "nil")
+    step_info = _create_build_step_info(tmp_path, "p1", "plain")
 
-    result = lifecycle_service._stage_ros_runtime_dependencies(step_info)
-
-    assert result is True
-    mock_callback.assert_not_called()
+    assert lifecycle_service._run_plugin_post_build(step_info) is True
 
 
 @pytest.mark.usefixtures(
@@ -405,48 +409,27 @@ def test_stage_ros_runtime_dependencies_ignores_non_colcon_parts(
         }
     ],
 )
-def test_stage_ros_runtime_dependencies_colcon_packages(
+def test_run_plugin_post_build_calls_hook_with_part_properties(
     default_image_info, mocker, fake_services, tmp_path
 ):
-    """The colcon-packages selection is read from the part's properties."""
+    """The plugin's post_build gets the step info and the part's properties."""
     mocker.patch.object(
         fake_services.get("image"), "obtain_image", return_value=default_image_info
     )
     mocker.patch.object(LifecycleManager, "__init__", return_value=None)
-    mock_callback = mocker.patch.object(
-        lifecycle_module._ros, "stage_runtime_dependencies_callback"
-    )
-    lifecycle_service = fake_services.get("lifecycle")
-    step_info = _create_build_step_info(tmp_path, "ros-part", "colcon")
-
-    result = lifecycle_service._stage_ros_runtime_dependencies(step_info)
-
-    assert result is mock_callback.return_value
-    mock_callback.assert_called_once_with(step_info, packages=["demo_nodes_cpp"])
-
-
-@pytest.mark.usefixtures(
-    "colcon_plugin_registered", "configured_project", "project_keys"
-)
-@pytest.mark.parametrize(
-    "project_keys",
-    [{"parts": {"ros-part": {"plugin": "colcon", "source": "."}}}],
-)
-def test_stage_ros_runtime_dependencies_no_colcon_packages(
-    default_image_info, mocker, fake_services, tmp_path
-):
-    """Without colcon-packages, staging covers the whole workspace."""
+    plugin_class = mock.Mock()
     mocker.patch.object(
-        fake_services.get("image"), "obtain_image", return_value=default_image_info
-    )
-    mocker.patch.object(LifecycleManager, "__init__", return_value=None)
-    mock_callback = mocker.patch.object(
-        lifecycle_module._ros, "stage_runtime_dependencies_callback"
+        lifecycle_module,
+        "get_registered_plugins",
+        return_value={"colcon": plugin_class},
     )
     lifecycle_service = fake_services.get("lifecycle")
     step_info = _create_build_step_info(tmp_path, "ros-part", "colcon")
 
-    result = lifecycle_service._stage_ros_runtime_dependencies(step_info)
+    result = lifecycle_service._run_plugin_post_build(step_info)
 
-    assert result is mock_callback.return_value
-    mock_callback.assert_called_once_with(step_info, packages=None)
+    assert result is plugin_class.post_build.return_value
+    plugin_class.post_build.assert_called_once()
+    called_step_info, part_properties = plugin_class.post_build.call_args.args
+    assert called_step_info is step_info
+    assert part_properties["colcon-packages"] == ["demo_nodes_cpp"]

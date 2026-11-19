@@ -19,9 +19,10 @@
 The runtime dependencies of a ROS 2 workspace are only known at build time,
 once the workspace sources (and their ``package.xml`` files) have been pulled.
 This module is therefore run at build time:
-:func:`stage_runtime_dependencies_callback` is registered as a craft-parts
-``PRE_ORGANIZE`` callback for the build step of colcon parts (see
-:mod:`rockcraft.services.lifecycle`), and runs in-process in the build
+:func:`stage_runtime_dependencies_callback` is called by the ``post_build`` hook
+of the colcon plugin (see :mod:`rockcraft.plugins.colcon_plugin`), which the
+lifecycle service runs as a craft-parts ``PRE_ORGANIZE`` callback (see
+:mod:`rockcraft.services.lifecycle`), in-process in the build
 environment right after the colcon build installed the workspace.
 
 The ``exec_depends`` declared in the workspace's ``package.xml`` files are
@@ -290,9 +291,9 @@ def stage_runtime_dependencies_callback(
 ) -> bool:
     """Stage the ROS 2 runtime dependencies of a colcon part.
 
-    This is a craft-parts step callback meant to be registered for the build
-    step at the ``PRE_ORGANIZE`` hook point (see
-    :mod:`rockcraft.services.lifecycle`). It runs in-process, in the build
+    This is a craft-parts step callback, called at the build step's
+    ``PRE_ORGANIZE`` hook point by the colcon plugin's ``post_build`` hook (see
+    :mod:`rockcraft.plugins.colcon_plugin`). It runs in-process, in the build
     environment, right after the part's build script completed, so the
     workspace sources (and their ``package.xml`` files) have been pulled and
     the colcon build installed the workspace into the part's install

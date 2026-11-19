@@ -344,3 +344,35 @@ def test_get_build_commands_rosdep_no_filter_without_colcon_packages(base, tmp_p
 
     assert '--from-paths "${CRAFT_PART_SRC_WORK}"' in rosdep_install
     assert "--packages-select" not in rosdep_install
+
+
+@pytest.mark.parametrize(
+    ("part_properties", "expected_packages"),
+    [
+        pytest.param(
+            {"colcon-packages": ["demo_nodes_cpp"]},
+            ["demo_nodes_cpp"],
+            id="colcon-packages",
+        ),
+        pytest.param(
+            {"colcon_packages": ["demo_nodes_py"]},
+            ["demo_nodes_py"],
+            id="underscored-colcon-packages",
+        ),
+        pytest.param({"colcon-packages": []}, None, id="empty-selection"),
+        pytest.param({}, None, id="no-selection"),
+    ],
+)
+def test_post_build_stages_runtime_dependencies(
+    mocker, part_properties, expected_packages
+):
+    # The staging is scoped to the colcon-packages selection, if any.
+    stage = mocker.patch(
+        "rockcraft.plugins.colcon_plugin._ros.stage_runtime_dependencies_callback"
+    )
+    step_info = mocker.Mock()
+
+    result = ColconPlugin.post_build(step_info, part_properties)
+
+    assert result is stage.return_value
+    stage.assert_called_once_with(step_info, packages=expected_packages)

@@ -18,10 +18,14 @@
 
 import logging
 import pathlib
-from typing import cast
+from collections.abc import Mapping
+from typing import Any, cast
 
+from craft_parts.infos import StepInfo
 from craft_parts.plugins import colcon_plugin
 from typing_extensions import override
+
+from . import _ros
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +50,10 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
       in the workspace's ``package.xml`` files, so users do not have to list
       every ROS runtime dependency by hand in ``stage-packages``. The runtime
       dependencies are resolved to apt packages and unpacked into the part's
-      install directory so they are primed into the rock. This runs as a
-      craft-parts ``PRE_ORGANIZE`` callback (see
-      :mod:`rockcraft.plugins._ros`), since the runtime dependencies are only
-      known once the workspace has been pulled and built.
+      install directory so they are primed into the rock. This runs in the
+      ``post_build`` hook (see :mod:`rockcraft.plugins._ros`), since the
+      runtime dependencies are only known once the workspace has been pulled
+      and built.
     - Source the ROS environment with ``nounset`` (``set -u``) disabled. The
       ament setup scripts reference several unset shell variables, which would
       otherwise abort the ``set -euo pipefail`` build script.
@@ -101,6 +105,23 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
             + self._get_remove_colcon_ignore_commands()
             + self._get_relocate_commands()
         )
+
+    @classmethod
+    def post_build(
+        cls, step_info: StepInfo, part_properties: Mapping[str, Any]
+    ) -> bool:
+        """Stage the ROS 2 runtime dependencies once the workspace is built.
+
+        Run by the lifecycle service right after the build script, in the build
+        environment. Staging is scoped to the part's ``colcon-packages``
+        selection, if any.
+        """
+        packages = (
+            part_properties.get("colcon-packages")
+            or part_properties.get("colcon_packages")
+            or None
+        )
+        return _ros.stage_runtime_dependencies_callback(step_info, packages=packages)
 
     @override
     def _get_install_path(self) -> pathlib.Path:
