@@ -51,7 +51,45 @@ persist across container replacement unless a volume is mounted at that path.
     go-framework
     express-framework
     spring-boot-framework
+    ros2-foxy
     ros2-humble
     ros2-jazzy
     ros2-lyrical
-    ros2-foxy
+
+.. _reference-extensions-ros2:
+
+ROS 2 extensions
+----------------
+
+The ROS 2 extensions build ROS 2 workspaces with the
+:ref:`colcon plugin <rockcraft_colcon_plugin>`. Each extension targets one ROS 2
+distribution and its matching Ubuntu base:
+
+.. list-table::
+    :header-rows: 1
+
+    * - Extension
+      - ROS 2 distribution
+      - Base
+    * - :ref:`ros2-foxy <reference-ros2-foxy>`
+      - Foxy Fitzroy
+      - ``ubuntu@20.04``
+    * - :ref:`ros2-humble <reference-ros2-humble>`
+      - Humble Hawksbill
+      - ``ubuntu@22.04``
+    * - :ref:`ros2-jazzy <reference-ros2-jazzy>`
+      - Jazzy Jalisco
+      - ``ubuntu@24.04``
+    * - :ref:`ros2-lyrical <reference-ros2-lyrical>`
+      - Lyrical Luth
+      - ``ubuntu@26.04``
+
+All of them:
+
+- Add the ROS 2 apt repository for the suite of the base.
+- Set ``ROS_DISTRO`` in the build environment of every part.
+- Add a launcher part that provides the ``ros2`` and ``ros2-source`` wrappers.
+
+The ROS 2 extensions are experimental on every base. Set
+``ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1`` when running Rockcraft to use
+them.

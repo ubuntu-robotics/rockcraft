@@ -9,49 +9,81 @@ colcon plugin
 The colcon plugin builds `ROS 2 <https://docs.ros.org>`_ packages using the
 `colcon <https://colcon.readthedocs.io>`_ meta build tool.
 
-The plugin runs ``colcon build`` with ``--merge-install``, installing the built
-workspace into ``/opt/ros/overlay`` of the part's install directory. The
-workspace is an *overlay* on top of the ROS 2 *underlay* that is installed in
-``/opt/ros/$ROS_DISTRO``, so the built executables are in
-``/opt/ros/overlay/lib/<package>``. The plugin uses the ``colcon-ros`` extension
-so that the build discovers the packages of the underlay and the overlay
-chains on it. Because the workspace is built in the part's install directory,
-the plugin rewrites the build-time install prefix to ``/opt/ros/overlay`` in
-the text files that colcon generates (the ``setup.*`` and ``local_setup.*``
-scripts), so that the overlay can be sourced from its final location.
+The :ref:`ROS 2 extensions <reference-extensions-ros2>` set up the requirements below
+for you.
 
-To use the workspace, source the underlay's ``/opt/ros/$ROS_DISTRO/setup.sh``
-and then the overlay's ``/opt/ros/overlay/local_setup.sh``, which does not chain
-to the underlay, for example through the ``ros2`` or
-``ros2-source`` wrappers of the :ref:`ROS 2 extensions <reference-extensions>`.
-Commands that run the built executables must do this, because the libraries in
-``/opt/ros/overlay/lib`` and ``/opt/ros/$ROS_DISTRO/lib`` are not in the
-default library search path. The required build tools
-(``gcc``, ``g++``, ``cmake`` and the ``colcon`` packages) are installed
-automatically.
+Requirements
+------------
 
-The plugin also uses `rosdep <https://docs.ros.org/en/independent/api/rosdep/html/>`_
-to automatically install the *build-time* dependencies and stage the *runtime*
-dependencies declared in the ``package.xml`` files in the workspace. This means the
-ROS 2 build and runtime dependencies of your packages do not need to be listed
-by hand in ``build-packages`` or ``stage-packages``. The runtime dependencies
-are resolved to apt packages and unpacked into the part's install directory so
-they are primed into the rock.
+- ``ROS_DISTRO`` must be set in the part's ``build-environment``. The build
+  fails if it is unset.
+- The `ROS 2 apt repository <http://packages.ros.org/ros2/ubuntu>`_ for the
+  Ubuntu release of the build must be added with a top-level
+  ``package-repositories`` entry, so that rosdep can resolve dependencies.
 
-.. note::
 
-    ``ROS_DISTRO`` must be set in the part's ``build-environment``, and the
-    matching ROS 2 apt repository must be configured for rosdep to resolve
-    dependencies. The build fails if ``ROS_DISTRO`` is unset. The
-    :ref:`ROS 2 extensions <reference-extensions>` set both up for you.
+Build behavior
+--------------
 
-.. note::
+The plugin does the following:
 
-    ROS 2 packages are published for specific Ubuntu releases through the
-    `ROS 2 apt repositories <http://packages.ros.org/ros2/ubuntu>`_. Add the
-    relevant repository with a top-level ``package-repositories`` entry so that
-    rosdep can resolve and install your project's ROS 2 dependencies.
+#. Installs the build tools: ``gcc``, ``g++``, ``cmake``, ``make``, ``rosdep``
+   and the ``colcon`` packages, including the ``colcon-ros`` extension.
+#. Installs the *build-time* dependencies of the packages with
+   `rosdep <https://docs.ros.org/en/independent/api/rosdep/html/>`_, using the
+   ``package.xml`` files in the workspace.
+#. Sources the underlay at ``/opt/ros/$ROS_DISTRO``, if present.
+#. Runs ``colcon build`` with ``--merge-install``, installing the workspace
+   into ``/opt/ros/overlay`` of the part's install directory.
+#. Rewrites the build-time install prefix to ``/opt/ros/overlay`` in the text
+   files that colcon generates (the ``setup.*`` and ``local_setup.*`` scripts),
+   so that the overlay can be sourced from its final location.
+#. Resolves the *runtime* dependencies from the ``package.xml`` files to apt
+   packages and unpacks them into the part's install directory, so that they
+   are primed into the rock.
 
+Because rosdep handles both kinds of dependencies, the ROS 2 dependencies of
+your packages don't need to be listed in ``build-packages`` or
+``stage-packages``.
+
+
+Workspace layout
+----------------
+
+The built workspace is an *overlay* on top of the ROS 2 *underlay*.
+
+.. list-table::
+    :header-rows: 1
+
+    * - Item
+      - Path
+    * - Underlay
+      - ``/opt/ros/$ROS_DISTRO``
+    * - Overlay
+      - ``/opt/ros/overlay``
+    * - Built executables
+      - ``/opt/ros/overlay/lib/<package>``
+
+
+Run the built workspace
+-----------------------
+
+The libraries in ``/opt/ros/overlay/lib`` and ``/opt/ros/$ROS_DISTRO/lib`` are
+not in the default library search path. A command that runs the built
+executables must first source the underlay and then the overlay:
+
+.. code-block:: sh
+
+    . /opt/ros/$ROS_DISTRO/setup.sh
+    . /opt/ros/overlay/local_setup.sh
+
+The ``ros2-source`` wrapper of the
+:ref:`ROS 2 extensions <reference-extensions-ros2>` does this and then runs the
+command it's given.
+
+The ``ros2`` wrapper, provided by the same extensions, does the same and runs
+the ``ros2`` command-line tool, so that a service can use
+``ros2 run <package> <executable>`` as its command.
 
 Keys
 ----
@@ -65,6 +97,7 @@ colcon-packages
 The colcon packages to build. If set, these are passed to ``colcon build`` as
 ``--packages-select``. If unset, all packages found in the source tree are
 built.
+The build-time and runtime dependencies are only resolved for these packages.
 
 colcon-packages-ignore
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -72,6 +105,7 @@ colcon-packages-ignore
 
 The colcon packages to ignore during the build. These are passed to
 ``colcon build`` as ``--packages-ignore``.
+The build-time and runtime dependencies of these packages are not resolved.
 
 colcon-cmake-args
 ~~~~~~~~~~~~~~~~~
@@ -101,7 +135,7 @@ Example
 -------
 
 The following part builds the ``demo_nodes_cpp`` package from the ROS 2 demos
-for the Jazzy distribution on the ``ubuntu@24.04`` base:
+for the Lyrical distribution on the ``ubuntu@26.04`` base:
 
 .. code-block:: yaml
 
@@ -109,19 +143,19 @@ for the Jazzy distribution on the ``ubuntu@24.04`` base:
       - type: apt
         url: http://packages.ros.org/ros2/ubuntu
         components: [main]
-        suites: [noble]
+        suites: [resolute]
         key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 
     parts:
       demo-nodes:
         plugin: colcon
         source: https://github.com/ros2/demos.git
-        source-branch: jazzy
+        source-branch: lyrical
         colcon-packages: [demo_nodes_cpp]
         build-environment:
-          - ROS_DISTRO: jazzy
+          - ROS_DISTRO: lyrical
 
-The build dependencies (``ros-jazzy-ament-cmake``, ``ros-jazzy-rclcpp``, and so
+The build dependencies (``ros-lyrical-ament-cmake``, ``ros-lyrical-rclcpp``, and so
 on) are resolved and installed automatically by rosdep from the package's
 ``package.xml``, and the runtime dependencies are resolved and staged the same
 way, so neither needs to appear in ``build-packages`` or ``stage-packages``.

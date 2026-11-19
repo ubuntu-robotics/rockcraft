@@ -3,81 +3,117 @@
 
 .. _reference-ros2-jazzy:
 
-ros2-jazzy extension
-====================
+ROS 2 Jazzy
+===========
 
-The ``ros2-jazzy`` extension streamlines the process of building
-`ROS 2 Jazzy Jalisco <https://docs.ros.org/en/jazzy/>`_ rocks targeting
-the ``ubuntu@24.04`` base.
+The ROS 2 Jazzy extension streamlines the process of building
+`ROS 2 Jazzy Jalisco <https://docs.ros.org/en/jazzy/>`_ application rocks.
 
-It automatically:
-
-* Adds the `ROS 2 apt repository <http://packages.ros.org/ros2/ubuntu>`_ for
-  the ``noble`` suite to ``package-repositories``.
-* Injects ``ROS_DISTRO: jazzy`` into the ``build-environment`` of every part,
-  so the :ref:`colcon plugin <rockcraft_colcon_plugin>` can source the correct
-  underlay workspace.
+The extension adds the `ROS 2 apt repository
+<http://packages.ros.org/ros2/ubuntu>`_ for the ``noble`` suite, sets
+``ROS_DISTRO: jazzy`` in the build environment of every part so that the
+:ref:`colcon plugin <rockcraft_colcon_plugin>` can find the underlay workspace,
+and adds launcher scripts that source the ROS 2 environment at runtime.
 
 .. note::
-
-    The ``ros2-jazzy`` extension is compatible with the ``ubuntu@24.04`` and
-    ``bare`` bases. Use :ref:`ros2-humble <reference-ros2-humble>` for
-    ``ubuntu@22.04`` or :ref:`ros2-lyrical <reference-ros2-lyrical>` for
+    The ROS 2 Jazzy extension is compatible with the ``bare`` and
+    ``ubuntu@24.04`` bases. Use :ref:`ROS 2 Foxy <reference-ros2-foxy>` for
+    ``ubuntu@20.04``, :ref:`ROS 2 Humble <reference-ros2-humble>` for
+    ``ubuntu@22.04`` or :ref:`ROS 2 Lyrical <reference-ros2-lyrical>` for
     ``ubuntu@26.04``.
 
-.. note::
+    The extension is experimental. Set
+    ``ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1`` when running Rockcraft to use
+    it.
 
-    With the ``bare`` base you must set ``build-base: ubuntu@24.04`` so the
-    ROS 2 apt repository (``noble`` suite) matches the build environment. A
-    mismatched ``build-base`` is rejected at build time.
+Use the extension
+-----------------
 
-.. important::
-
-    This extension is **experimental**: its behaviour may change in future
-    releases. Set ``ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=true`` in your
-    environment to enable it.
-
-
-Usage
------
-
-Add ``ros2-jazzy`` to the ``extensions`` list of your project file:
+Declare the extension in ``rockcraft.yaml``:
 
 .. code-block:: yaml
-    :caption: rockcraft.yaml
+   :caption: rockcraft.yaml
 
-    name: my-ros2-jazzy-rock
-    base: ubuntu@24.04
-    version: "0.1"
-    summary: My ROS 2 Jazzy rock
-    description: A rock built with the ros2-jazzy extension.
-    license: Apache-2.0
-    platforms:
-      amd64:
+   extensions:
+     - ros2-jazzy
 
-    extensions: [ros2-jazzy]
+To inspect the parts, services, and other configuration contributed by the
+extension, run ``rockcraft expand-extensions`` in the same directory as the
+``rockcraft.yaml`` file.
 
-    parts:
-      my-node:
-        plugin: colcon
-        source: .
+.. _reference-ros2-jazzy-project-requirements:
 
-The extension adds the following to the above project file at build time:
+Project requirements
+--------------------
+
+To use the ``ros2-jazzy`` extension, the project must contain a colcon
+workspace: one or more ROS 2 packages, each with a ``package.xml`` file, built
+by a part that uses the :ref:`colcon plugin <rockcraft_colcon_plugin>`.
+
+For rocks with ``base: bare``:
+
+- ``build-base`` is mandatory and must be ``ubuntu@24.04``, so that the ROS 2
+  apt repository (``noble`` suite) matches the build environment. Rockcraft
+  rejects any other ``build-base``.
+- The rock needs a shell and the basic utilities, because the launcher scripts
+  run with ``/bin/sh`` and some ROS 2 Python executables use
+  ``#!/usr/bin/env python3``. Stage the ``base-files``, ``coreutils`` and
+  ``dash`` packages.
+
+For example:
 
 .. code-block:: yaml
+   :caption: rockcraft.yaml
 
-    package-repositories:
-      - type: apt
-        url: http://packages.ros.org/ros2/ubuntu
-        components: [main]
-        suites: [noble]
-        key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+   base: bare
+   build-base: ubuntu@24.04
 
-    parts:
-      my-node:
-        build-environment:
-          - ROS_DISTRO: jazzy
+   parts:
+     my-node:
+       plugin: colcon
+       source: .
+       stage-packages:
+         - base-files
+         - coreutils
+         - dash
 
+.. _reference-ros2-jazzy-launchers:
+
+Run the application
+-------------------
+
+The extension adds a part named ``ros2-jazzy/launch`` that installs two scripts
+in the rock. Both source the ROS 2 underlay in ``/opt/ros/jazzy`` and then the
+workspace overlay in ``/opt/ros/overlay``, before running the command:
+
+- ``/usr/bin/ros2`` runs the ``ros2`` command-line tool, for example
+  ``ros2 run <package> <executable>``.
+- ``/usr/bin/ros2-source`` runs any other command, for executables that aren't
+  ``ros2`` invocations.
+
+Service and entrypoint commands must use one of them, because the ROS 2
+libraries aren't in the default library search path.
+
+The ``ros2`` tool also needs the package that provides the subcommand in the
+rock, such as ``ros-jazzy-ros2run`` for ``ros2 run`` or ``ros-jazzy-ros2launch``
+for ``ros2 launch``. For example, to list it in the ``stage-packages`` of your
+part:
+
+.. code-block:: yaml
+   :caption: rockcraft.yaml
+
+   services:
+     my-node:
+       override: replace
+       startup: enabled
+       command: ros2 run my_package my_executable
+
+   parts:
+     my-node:
+       plugin: colcon
+       source: .
+       stage-packages:
+         - ros-jazzy-ros2run
 
 Useful links
 ------------
