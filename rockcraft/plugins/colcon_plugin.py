@@ -35,13 +35,10 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
     This plugin extends Craft-parts' vanilla colcon plugin to make it possible
     to build real ROS 2 (ament) workspaces inside a rock. Specifically:
 
-    - Add the ``make`` and ``python3-colcon-recursive-crawl`` build packages,
-      which are required to build ament_cmake packages (the former provides the
-      CMake "Unix Makefiles" generator, the latter the ``--base-paths`` colcon
-      discovery argument used by the plugin), and ``python3-colcon-ros``, which
-      makes colcon build the packages as ROS packages. Without it the
-      workspace is not added to ``AMENT_PREFIX_PATH`` when sourced, so its
-      packages cannot be found through the ament index.
+    - Add the ``python3-colcon-ros`` build package, which makes colcon build
+      the packages as ROS packages. Without it the workspace is not added to
+      ``AMENT_PREFIX_PATH`` when sourced, so its packages cannot be found
+      through the ament index.
     - Use ``rosdep`` to automatically install the *build-time* dependencies
       declared in the workspace's ``package.xml`` files, so users do not have to
       list every ROS build dependency by hand in ``build-packages``.
@@ -68,9 +65,7 @@ class ColconPlugin(colcon_plugin.ColconPlugin):
     def get_build_packages(self) -> set[str]:
         """Return a set of required packages to install in the build environment."""
         return super().get_build_packages() | {
-            "make",
             "python3-colcon-package-information",
-            "python3-colcon-recursive-crawl",
             "python3-colcon-ros",
             "python3-rosdep",
         }
