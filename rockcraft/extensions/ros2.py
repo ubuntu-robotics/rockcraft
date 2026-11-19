@@ -111,7 +111,7 @@ class _ROS2Base(Extension):
         emit.progress(
             f"ros2-{self.distro}: run ROS 2 service and entrypoint commands "
             "through the injected wrappers so the ROS 2 environment is "
-            'sourced at runtime, e.g. "command: ros2 run <package> <node>" '
+            'sourced at runtime, e.g. "command: ros2 run <package> <executable>" '
             "(use 'ros2-source <command>' for executables that are not ros2 "
             "CLI invocations).",
             permanent=True,
@@ -154,8 +154,6 @@ class _ROS2Base(Extension):
         - ``ros2-source`` (installed to ``/usr/bin/ros2-source``) runs any
           other command with the ROS 2 environment sourced.
 
-        This mirrors the ``command-chain`` launcher mechanism used by the
-        equivalent snapcraft extensions.
 
         The part is named ``<extension-name><sep>launch``, where the separator
         depends on the base (see :meth:`Extension.get_part_name`).
@@ -169,12 +167,6 @@ class _ROS2Base(Extension):
                     "ros2-source": "usr/bin/ros2-source",
                 },
                 "stage": ["usr/bin/ros2", "usr/bin/ros2-source"],
-                # libblas3/liblapack3 are undeclared runtime deps of rclpy on
-                # all ROS 2 distros: rosidl_generator_py generates Python
-                # message bindings that import numpy, which links against
-                # BLAS/LAPACK.  These are absent from every package.xml so
-                # rosdep cannot resolve them automatically.
-                # "stage-packages": ["libblas3", "liblapack3"],
             },
         }
 
@@ -220,7 +212,7 @@ class ROS2JazzyExtension(_ROS2Base):
 
 
 class ROS2LyricalExtension(_ROS2Base):
-    """Extension for ROS 2 Lyrical Lizard on ubuntu@26.04."""
+    """Extension for ROS 2 Lyrical Luth on ubuntu@26.04."""
 
     @staticmethod
     @override

@@ -11,14 +11,15 @@
 set -e
 
 _ros2_prefix=""
-# Same discovery as ros2-source: ROS distros are named alphabetically in
-# release order (Humble < Iron < Jazzy < Lyrical < …), so iterating without
+# Glob expands in alphabetical order; ROS distros are named alphabetically in
+# release order (Humble < Jazzy < Lyrical < …), so iterating without
 # breaking means _ros2_prefix ends up pointing at the latest installed distro.
 # The workspace overlay is not a distro: skip it.
 for _f in /opt/ros/*/setup.sh; do
     case "$_f" in
     /opt/ros/overlay/setup.sh) continue ;;
     esac
+    # An unmatched glob stays literal; this skips it.
     if [ -f "$_f" ]; then
         _ros2_prefix="${_f%/setup.sh}"
     fi

@@ -259,7 +259,7 @@ def test_ros2_get_root_snippet_emits_launcher_notice(
     emitter.assert_progress(
         f"ros2-{distro}: run ROS 2 service and entrypoint commands "
         "through the injected wrappers so the ROS 2 environment is "
-        'sourced at runtime, e.g. "command: ros2 run <package> <node>" '
+        'sourced at runtime, e.g. "command: ros2 run <package> <executable>" '
         "(use 'ros2-source <command>' for executables that are not ros2 "
         "CLI invocations).",
         permanent=True,
