@@ -12,6 +12,10 @@ environment:
   # The ros2-* extensions are experimental while they stabilise.
   ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
 
+  # Container and image names, shared by the execute and restore sections.
+  SCENARIO: extension-ros2
+  IMAGE: extension-ros2:0.1
+
   DISTRO/foxy_2004: foxy
   BASE/foxy_2004: ubuntu@20.04
   LAUNCH_FILE/foxy_2004: talker_listener.launch.py
@@ -39,10 +43,8 @@ prepare: |
       rockcraft-template.yaml > rockcraft.yaml
 
 execute: |
-  SCENARIO="extension-ros2"
   ARCH=$(dpkg --print-architecture)
   ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
-  IMAGE="${SCENARIO}:0.1"
 
   # Build the rock & load it into docker
   run_rockcraft pack ${PACK_ARGS}
@@ -81,4 +83,5 @@ execute: |
 restore: |
   docker stop "${SCENARIO}" 2>/dev/null || true
   docker rm "${SCENARIO}" 2>/dev/null || true
+  docker rmi -f "${IMAGE}" 2>/dev/null || true
   rm -f rockcraft.yaml

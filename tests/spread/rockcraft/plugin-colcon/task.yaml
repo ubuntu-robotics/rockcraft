@@ -11,6 +11,10 @@ summary: colcon plugin test (ROS 2 talker/listener, C++ and Python)
 # base (the *_bare variants). A bare rock ships nothing else, so it exercises
 # the full staging of the runtime dependencies.
 environment:
+  # Container and image names, shared by the execute and restore sections.
+  SCENARIO: plugin-colcon
+  IMAGE: plugin-colcon:0.1
+
   DISTRO/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: foxy
   BASE/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: ubuntu@20.04
   SUITE/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: focal
@@ -59,10 +63,8 @@ prepare: |
       rockcraft-template.yaml > rockcraft.yaml
 
 execute: |
-  SCENARIO="plugin-colcon"
   ARCH=$(dpkg --print-architecture)
   ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
-  IMAGE="${SCENARIO}:0.1"
 
   # Build the rock & load it into docker
   run_rockcraft pack ${PACK_ARGS}
@@ -91,4 +93,5 @@ execute: |
 restore: |
   docker stop "${SCENARIO}" 2>/dev/null || true
   docker rm "${SCENARIO}" 2>/dev/null || true
+  docker rmi -f "${IMAGE}" 2>/dev/null || true
   rm -f rockcraft.yaml
