@@ -38,6 +38,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 
 from catkin_pkg import packages as catkin_packages
 from craft_parts.infos import StepInfo
@@ -154,6 +155,7 @@ def _resolve_apt_dependencies(
     ros_distro: str,
     colcon_packages: list[str] | None = None,
     colcon_packages_ignore: list[str] | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> set[str]:
     """Resolve the runtime apt dependencies of the workspace with rosdep.
 
@@ -167,8 +169,12 @@ def _resolve_apt_dependencies(
     time). Packages listed in *colcon_packages_ignore* are never processed
     (mirrors ``colcon-packages-ignore``).
 
+    *environment* is the environment of the build script. It is the one rosdep
+    runs with, so that it finds the cache populated by the build's
+    ``rosdep update`` (see ``ROS_HOME``), and it provides ``ROS_PYTHON_VERSION``.
     """
     apt_packages: set[str] = set()
+    ros_python_version = (environment or {}).get("ROS_PYTHON_VERSION", "3")
 
     installed_pkgs = catkin_packages.find_packages(part_install).values()
     installed_names = {pkg.name for pkg in installed_pkgs}
@@ -186,7 +192,7 @@ def _resolve_apt_dependencies(
             {
                 "ROS_VERSION": ros_version,
                 "ROS_DISTRO": ros_distro,
-                "ROS_PYTHON_VERSION": "3",
+                "ROS_PYTHON_VERSION": ros_python_version,
             }
         )
         # Retrieve only the 'exec_depends' whose condition is true.
@@ -210,6 +216,7 @@ def _resolve_apt_dependencies(
             cmd,
             check=True,
             capture_output=True,
+            env=dict(environment) if environment else None,
         )
     except subprocess.CalledProcessError as error:
         stdout = error.stdout.decode().strip()
@@ -297,6 +304,7 @@ def stage_runtime_dependencies(  # noqa: PLR0913 (too many arguments)
     base: str,
     colcon_packages: list[str] | None = None,
     colcon_packages_ignore: list[str] | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> None:
     """Stage the runtime dependencies of the ROS workspace using rosdep."""
     logger.info("Staging runtime dependencies...")
@@ -308,6 +316,7 @@ def stage_runtime_dependencies(  # noqa: PLR0913 (too many arguments)
         ros_distro=ros_distro,
         colcon_packages=colcon_packages,
         colcon_packages_ignore=colcon_packages_ignore,
+        environment=environment,
     )
 
     if not apt_packages:
@@ -376,10 +385,10 @@ def stage_runtime_dependencies_callback(
     directory.
 
     ``ROS_DISTRO`` is read from the part's build step environment (the
-    ``environment.sh`` that craft-parts generates for the build script); it is
-    *not* present in this process' own environment, which is merely the
-    environment rockcraft itself runs with. If ``ROS_DISTRO`` is not set the
-    staging is skipped with a warning, since rosdep cannot resolve
+    ``environment.sh`` that craft-parts generates for the build script, evaluated
+    by a shell); it is *not* present in this process' own environment, which is
+    merely the environment rockcraft itself runs with. If ``ROS_DISTRO`` is not
+    set the staging is skipped with a warning, since rosdep cannot resolve
     dependencies without a ROS distribution.
 
     :param step_info: The step information passed by craft-parts.
@@ -409,6 +418,7 @@ def stage_runtime_dependencies_callback(
         base=str(step_info.project_info.base),
         colcon_packages=colcon_packages,
         colcon_packages_ignore=colcon_packages_ignore,
+        environment=environment,
     )
 
     _fix_library_alternatives(part_install=str(step_info.part_install_dir))
@@ -417,30 +427,29 @@ def stage_runtime_dependencies_callback(
 
 
 def _read_step_environment(step_info: StepInfo) -> dict[str, str]:
-    """Read the environment generated for the part's build step.
+    """Return the environment the part's build script ran with.
 
     craft-parts writes the step environment to ``environment.sh`` in the
-    part's run directory right before executing the build script. The file is
-    a series of ``export KEY="value"`` lines covering the application, part,
-    plugin and user (``build-environment``) environment. It is sourced by the
-    build script but is *not* exported into the environment of the process
-    running the lifecycle, so it is read back here.
+    part's run directory right before executing the build script. It is a shell
+    script whose ``export`` values may reference other variables (e.g.
+    ``ROS_DISTRO: ${CHOSEN_DISTRO}``), so a shell evaluates it, as for the
+    build script. The result is not exported into the environment of the
+    process running the lifecycle, hence it is computed here.
     """
-    environment: dict[str, str] = {}
     # The part's run directory is a sibling of its state directory.
     environment_file = step_info.part_state_dir.parent / "run" / "environment.sh"
-    try:
-        lines = environment_file.read_text().splitlines()
-    except FileNotFoundError:
+    if not environment_file.is_file():
         logger.debug("No build step environment file at %s", environment_file)
-        return environment
+        return {}
 
-    for line in lines:
-        match = re.fullmatch(r'export ([A-Za-z_][A-Za-z0-9_]*)="(.*)"', line)
-        if match:
-            environment[match.group(1)] = match.group(2)
-
-    return environment
+    result = subprocess.run(
+        ["/bin/bash", "-c", '. "$1" && env -0', "_", str(environment_file)],
+        check=True,
+        capture_output=True,
+    )
+    return dict(
+        item.split("=", 1) for item in result.stdout.decode().split("\0") if "=" in item
+    )
 
 
 def _fix_library_alternatives(part_install: str) -> None:

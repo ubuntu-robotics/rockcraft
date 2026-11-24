@@ -108,6 +108,30 @@ def test_resolve_apt_dependencies_resolves_exec_depends(monkeypatch):
     )
 
 
+def test_resolve_apt_dependencies_runs_rosdep_with_the_build_environment(monkeypatch):
+    workspace_pkg = _make_pkg("my_pkg", [_make_dep("rclcpp")])
+    monkeypatch.setattr(
+        _ros.catkin_packages,
+        "find_packages",
+        lambda path: {"my_pkg": workspace_pkg} if "src" in path else {},
+    )
+    run_result = mock.Mock()
+    run_result.stdout = b"#apt\nros-humble-rclcpp"
+    run = mock.Mock(return_value=run_result)
+    monkeypatch.setattr(_ros.subprocess, "run", run)
+    environment = {"ROS_HOME": "/custom/ros-home", "ROS_PYTHON_VERSION": "3"}
+
+    _ros._resolve_apt_dependencies(
+        part_src="/part/src",
+        part_install="/part/install",
+        ros_version="2",
+        ros_distro="humble",
+        environment=environment,
+    )
+
+    assert run.call_args.kwargs["env"] == environment
+
+
 def test_resolve_apt_dependencies_resolves_all_dependencies_in_one_call(monkeypatch):
     # Dependencies shared by several packages are resolved once, and all the
     # unique keys go in a single rosdep call (sorted, for a stable command).
@@ -585,9 +609,40 @@ def test_callback_stages_runtime_dependencies(monkeypatch, tmp_path):
         base="ubuntu@22.04",
         colcon_packages=None,
         colcon_packages_ignore=None,
+        environment=mock.ANY,
     )
     # The BLAS/LAPACK symlink fix runs after the staging.
     fix.assert_called_once_with(part_install=str(tmp_path / "parts/my-part/install"))
+
+
+def test_callback_evaluates_references_in_the_environment(monkeypatch, tmp_path):
+    staging = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", mock.Mock())
+    step_info = _make_step_info(
+        tmp_path,
+        environment={"CHOSEN_DISTRO": "humble", "ROS_DISTRO": "${CHOSEN_DISTRO}"},
+    )
+
+    _ros.stage_runtime_dependencies_callback(step_info)
+
+    assert staging.call_args.kwargs["ros_distro"] == "humble"
+
+
+def test_callback_passes_the_build_environment_to_staging(monkeypatch, tmp_path):
+    staging = mock.Mock()
+    monkeypatch.setattr(_ros, "stage_runtime_dependencies", staging)
+    monkeypatch.setattr(_ros, "_fix_library_alternatives", mock.Mock())
+    step_info = _make_step_info(
+        tmp_path,
+        environment={"ROS_DISTRO": "humble", "ROS_HOME": "/custom/ros-home"},
+    )
+
+    _ros.stage_runtime_dependencies_callback(step_info)
+
+    environment = staging.call_args.kwargs["environment"]
+    assert environment["ROS_HOME"] == "/custom/ros-home"
+    assert environment["ROS_DISTRO"] == "humble"
 
 
 def test_callback_packages_filter_and_default_ros_version(monkeypatch, tmp_path):
