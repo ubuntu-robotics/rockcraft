@@ -24,7 +24,7 @@ from typing_extensions import override
 
 from rockcraft import errors
 
-from .extension import Extension, get_extensions_data_dir
+from .extension import Extension, get_extensions_data_dir, get_project_base
 
 _ROS2_APT_KEY_ID = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
 _ROS2_APT_URL = "http://packages.ros.org/ros2/ubuntu"
@@ -64,29 +64,31 @@ class _ROS2Base(Extension):
 
     @override
     def _validate_extras(self) -> None:
-        """Check that a set ``build-base`` matches the extension's base.
+        """Check that the effective build base is the extension's base.
 
         The ROS 2 apt repository targets one Ubuntu suite, so the build
-        environment must run that suite. Mixing bases and build-bases is not
-        allowed: whenever ``build-base`` is set it must equal the targeted
-        base. When it is unset it defaults to the base, which is already
-        validated against :meth:`get_supported_bases`.
+        environment must run that suite, whatever the ``base`` is. The build
+        environment comes from ``build-base``, which defaults to ``base`` when
+        it is unset (and ``base`` is not ``bare``).
         """
-        base: str | None = self.yaml_data.get("base")
-        if base == "bare":
-            build_base: str | None = self.yaml_data.get("build-base")
-            expected_base = self._expected_base()
+        expected_base = self._expected_base()
+        if get_project_base(self.yaml_data) == expected_base:
+            return
 
-            if build_base != expected_base:
-                raise errors.ExtensionError(
-                    f"Extension {self.extension_name!r} targets {expected_base!r} "
-                    f"(ROS 2 {self.distro} on the {self.suite!r} suite), but the project "
-                    f"sets build-base {build_base!r}.",
-                    resolution=(
-                        f"Set 'build-base: {expected_base}' so the ROS 2 apt "
-                        "repository matches the build environment."
-                    ),
-                )
+        build_base: str | None = self.yaml_data.get("build-base")
+        raise errors.ExtensionError(
+            f"Extension {self.extension_name!r} targets {expected_base!r} "
+            f"(ROS 2 {self.distro} on the {self.suite!r} suite), but the project "
+            + (
+                f"sets build-base {build_base!r}."
+                if build_base
+                else "does not set a build-base."
+            ),
+            resolution=(
+                f"Set 'build-base: {expected_base}' so the ROS 2 apt "
+                "repository matches the build environment."
+            ),
+        )
 
     @staticmethod
     @override

@@ -50,11 +50,13 @@ To use the ``ros2-humble`` extension, the project must contain a colcon
 workspace: one or more ROS 2 packages, each with a ``package.xml`` file, built
 by a part that uses the :ref:`colcon plugin <rockcraft_colcon_plugin>`.
 
+The build environment must match the ROS 2 apt repository (``jammy`` suite), so
+Rockcraft rejects any ``build-base`` other than ``ubuntu@22.04``, whatever the
+``base``. When ``build-base`` is not set, it defaults to ``base``.
+
 For rocks with ``base: bare``:
 
-- ``build-base`` is mandatory and must be ``ubuntu@22.04``, so that the ROS 2
-  apt repository (``jammy`` suite) matches the build environment. Rockcraft
-  rejects any other ``build-base``.
+- ``build-base`` is mandatory and must be ``ubuntu@22.04``.
 - The rock needs a shell and the basic utilities, because the launcher scripts
   run with ``/bin/sh`` and some ROS 2 Python executables use
   ``#!/usr/bin/env python3``. Stage the ``base-files``, ``coreutils`` and

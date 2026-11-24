@@ -158,23 +158,43 @@ def test_ros2_apply_extension_bare_base(
 @pytest.mark.parametrize(
     ("extension_name", "base", "mismatched_build_base"),
     [
-        # A bare base must pair with the extension's matching base: the build
-        # environment comes entirely from build-base, so a different one
-        # mismatches the ROS 2 apt repo suite.
+        # The build environment comes entirely from build-base, so a different
+        # one mismatches the ROS 2 apt repo suite, whatever the base is.
         ("ros2-humble", "bare", "ubuntu@24.04"),
         ("ros2-jazzy", "bare", "ubuntu@22.04"),
         ("ros2-lyrical", "bare", "ubuntu@24.04"),
         ("ros2-foxy", "bare", "ubuntu@24.04"),
+        ("ros2-humble", "bare", "devel"),
+        ("ros2-humble", "ubuntu@22.04", "ubuntu@24.04"),
+        ("ros2-jazzy", "ubuntu@24.04", "ubuntu@22.04"),
+        ("ros2-lyrical", "ubuntu@26.04", "ubuntu@24.04"),
+        ("ros2-foxy", "ubuntu@20.04", "ubuntu@22.04"),
+        # The deprecated colon aliases are normalized before the comparison.
+        ("ros2-humble", "ubuntu@22.04", "ubuntu:24.04"),
+        ("ros2-humble", "ubuntu:22.04", "ubuntu:24.04"),
     ],
 )
 def test_ros2_mismatched_build_base_raises(
     tmp_path, extension_name, base, mismatched_build_base
 ):
-    """A bare base with a mismatched build-base is rejected."""
+    """A build-base other than the extension's base is rejected."""
     yaml_data = _make_input_yaml(base, extension_name)
     yaml_data["build-base"] = mismatched_build_base
 
-    with pytest.raises(ExtensionError, match="build-base"):
+    with pytest.raises(ExtensionError, match="sets build-base") as raised:
+        extensions.apply_extensions(tmp_path, yaml_data)
+
+    assert mismatched_build_base in str(raised.value)
+    assert raised.value.resolution is not None
+    assert "Set 'build-base: ubuntu@" in raised.value.resolution
+
+
+@pytest.mark.usefixtures("ros2_extensions")
+def test_ros2_bare_base_without_build_base_raises(tmp_path):
+    """A bare base has no build environment unless build-base is set."""
+    yaml_data = _make_input_yaml("bare", "ros2-humble")
+
+    with pytest.raises(ExtensionError, match="does not set a build-base"):
         extensions.apply_extensions(tmp_path, yaml_data)
 
 
@@ -191,6 +211,11 @@ def test_ros2_mismatched_build_base_raises(
         # non-bare base with an explicit matching build-base is fine.
         ("ros2-jazzy", "ubuntu@24.04", "ubuntu@24.04"),
         ("ros2-humble", "ubuntu@22.04", "ubuntu@22.04"),
+        # The deprecated colon aliases are equivalent to the @ format.
+        ("ros2-humble", "bare", "ubuntu:22.04"),
+        ("ros2-jazzy", "ubuntu:24.04", None),
+        ("ros2-jazzy", "ubuntu:24.04", "ubuntu:24.04"),
+        ("ros2-jazzy", "ubuntu@24.04", "ubuntu:24.04"),
     ],
 )
 def test_ros2_matching_build_base_accepted(
