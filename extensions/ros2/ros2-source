@@ -3,7 +3,8 @@
 #
 # Discovers and sources the ROS 2 installation under /opt/ros/, then the
 # workspace overlay that the colcon plugin installs in /opt/ros/overlay (if
-# any), and exec's the provided command.
+# any), and exec's the provided command. The overlay alone is enough when the
+# rock stages no ROS 2 installation.
 #
 # Usage: ros2-source <command> [args...]
 #   e.g. ros2-source /opt/ros/jazzy/lib/demo_nodes_cpp/talker
@@ -28,13 +29,13 @@ for _f in /opt/ros/*/setup.sh; do
 done
 unset _f
 
-if [ -z "${_ros2_setup}" ]; then
-    echo "ros2-source: no ROS 2 installation found under /opt/ros/" >&2
+if [ -n "${_ros2_setup}" ]; then
+    # shellcheck disable=SC1090
+    . "${_ros2_setup}"
+elif [ ! -f /opt/ros/overlay/local_setup.sh ]; then
+    echo "ros2-source: no ROS 2 installation or workspace overlay found under /opt/ros/" >&2
     exit 1
 fi
-
-# shellcheck disable=SC1090
-. "${_ros2_setup}"
 unset _ros2_setup
 
 # The overlay's local_setup.sh does not chain to the underlay sourced above.

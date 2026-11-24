@@ -79,7 +79,8 @@ executables must first source the underlay and then the overlay:
 
 The ``ros2-source`` wrapper of the
 :ref:`ROS 2 extensions <reference-extensions-ros2>` does this and then runs the
-command it's given.
+command it's given. If the rock has no ``/opt/ros/$ROS_DISTRO`` underlay, it
+sources only the overlay.
 
 The ``ros2`` wrapper, provided by the same extensions, does the same and runs
 the ``ros2`` command-line tool, so that a service can use

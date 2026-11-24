@@ -154,7 +154,8 @@ class _ROS2Base(Extension):
           CLI by absolute path, so service and entrypoint commands read
           naturally, e.g. ``command: ros2 run <package> <node>``.
         - ``ros2-source`` (installed to ``/usr/bin/ros2-source``) runs any
-          other command with the ROS 2 environment sourced.
+          other command with the ROS 2 environment sourced. It also works
+          with only the overlay, when no underlay is staged.
 
 
         The part is named ``<extension-name><sep>launch``, where the separator

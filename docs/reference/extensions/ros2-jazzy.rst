@@ -91,7 +91,8 @@ workspace overlay in ``/opt/ros/overlay``, before running the command:
 - ``/usr/bin/ros2`` runs the ``ros2`` command-line tool, for example
   ``ros2 run <package> <executable>``.
 - ``/usr/bin/ros2-source`` runs any other command, for executables that aren't
-  ``ros2`` invocations.
+  ``ros2`` invocations. It also works when the rock has the overlay but no
+  underlay.
 
 Service and entrypoint commands must use one of them, because the ROS 2
 libraries aren't in the default library search path.
