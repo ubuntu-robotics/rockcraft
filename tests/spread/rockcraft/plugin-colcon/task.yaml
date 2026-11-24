@@ -1,0 +1,97 @@
+summary: colcon plugin test (ROS 2 talker/listener, C++ and Python)
+
+# ROS 2 packages are only published for specific Ubuntu releases, so each
+# variant pairs an Ubuntu base with its matching ROS 2 distribution:
+#   - ROS 2 Foxy     -> ubuntu@20.04 (focal)
+#   - ROS 2 Humble   -> ubuntu@22.04 (jammy)
+#   - ROS 2 Jazzy    -> ubuntu@24.04 (noble)
+#   - ROS 2 Lyrical  -> ubuntu@26.04 (resolute)
+# Each pairing is built with a C++ (ament_cmake, demo_nodes_cpp) and a Python
+# (ament_python, demo_nodes_py) package, on both the ubuntu base and the bare
+# base (the *_bare variants). A bare rock ships nothing else, so it exercises
+# the full staging of the runtime dependencies.
+environment:
+  # Container and image names, shared by the execute and restore sections.
+  SCENARIO: plugin-colcon
+  IMAGE: plugin-colcon:0.1
+
+  DISTRO/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: foxy
+  BASE/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: ubuntu@20.04
+  SUITE/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: focal
+  # ubuntu@20.04 is end-of-life, so packing needs --ignore=unmaintained.
+  PACK_ARGS/foxy_2004_cpp,foxy_2004_py,foxy_2004_cpp_bare,foxy_2004_py_bare: --ignore=unmaintained
+
+  DISTRO/humble_2204_cpp,humble_2204_py,humble_2204_cpp_bare,humble_2204_py_bare: humble
+  BASE/humble_2204_cpp,humble_2204_py,humble_2204_cpp_bare,humble_2204_py_bare: ubuntu@22.04
+  SUITE/humble_2204_cpp,humble_2204_py,humble_2204_cpp_bare,humble_2204_py_bare: jammy
+  PACK_ARGS/humble_2204_cpp,humble_2204_py,humble_2204_cpp_bare,humble_2204_py_bare: ""
+
+  DISTRO/jazzy_2404_cpp,jazzy_2404_py,jazzy_2404_cpp_bare,jazzy_2404_py_bare: jazzy
+  BASE/jazzy_2404_cpp,jazzy_2404_py,jazzy_2404_cpp_bare,jazzy_2404_py_bare: ubuntu@24.04
+  SUITE/jazzy_2404_cpp,jazzy_2404_py,jazzy_2404_cpp_bare,jazzy_2404_py_bare: noble
+  PACK_ARGS/jazzy_2404_cpp,jazzy_2404_py,jazzy_2404_cpp_bare,jazzy_2404_py_bare: ""
+
+  DISTRO/lyrical_2604_cpp,lyrical_2604_py,lyrical_2604_cpp_bare,lyrical_2604_py_bare: lyrical
+  BASE/lyrical_2604_cpp,lyrical_2604_py,lyrical_2604_cpp_bare,lyrical_2604_py_bare: ubuntu@26.04
+  SUITE/lyrical_2604_cpp,lyrical_2604_py,lyrical_2604_cpp_bare,lyrical_2604_py_bare: resolute
+  PACK_ARGS/lyrical_2604_cpp,lyrical_2604_py,lyrical_2604_cpp_bare,lyrical_2604_py_bare: ""
+
+  PACKAGE/foxy_2004_cpp,humble_2204_cpp,jazzy_2404_cpp,lyrical_2604_cpp: demo_nodes_cpp
+  PACKAGE/foxy_2004_py,humble_2204_py,jazzy_2404_py,lyrical_2604_py: demo_nodes_py
+  PACKAGE/foxy_2004_cpp_bare,humble_2204_cpp_bare,jazzy_2404_cpp_bare,lyrical_2604_cpp_bare: demo_nodes_cpp
+  PACKAGE/foxy_2004_py_bare,humble_2204_py_bare,jazzy_2404_py_bare,lyrical_2604_py_bare: demo_nodes_py
+
+  BARE/foxy_2004_cpp_bare,humble_2204_cpp_bare,jazzy_2404_cpp_bare,lyrical_2604_cpp_bare: "true"
+  BARE/foxy_2004_py_bare,humble_2204_py_bare,jazzy_2404_py_bare,lyrical_2604_py_bare: "true"
+
+prepare: |
+  ROCK_BASE="${BASE}"
+  STAGE_PACKAGES="[]"
+  if [ "${BARE:-}" = "true" ]; then
+    # A bare rock has no shell (the service commands need one), no env (the
+    # Python entry points use "#!/usr/bin/env python3") nor the usrmerge
+    # symlinks of ubuntu@24.04 and newer.
+    ROCK_BASE=bare
+    STAGE_PACKAGES="[base-files, coreutils, dash]"
+  fi
+  sed -e "s/@DISTRO@/${DISTRO}/g" \
+      -e "s|@BASE@|${BASE}|g" \
+      -e "s|@ROCK_BASE@|${ROCK_BASE}|g" \
+      -e "s/@SUITE@/${SUITE}/g" \
+      -e "s/@PACKAGE@/${PACKAGE}/g" \
+      -e "s|\"@STAGE_PACKAGES@\"|${STAGE_PACKAGES}|g" \
+      rockcraft-template.yaml > rockcraft.yaml
+
+execute: |
+  ARCH=$(dpkg --print-architecture)
+  ROCK_FILE="${SCENARIO}_0.1_${ARCH}.rock"
+
+  # Build the rock & load it into docker
+  run_rockcraft pack ${PACK_ARGS}
+  echo expecting ${ROCK_FILE}
+  test -f ${ROCK_FILE}
+  rockcraft.skopeo copy --insecure-policy oci-archive:${ROCK_FILE} docker-daemon:${IMAGE}
+  rm ${ROCK_FILE}
+
+  # Start a detached container running pebble, then bring up the talker and
+  # listener services.  They communicate over DDS on the local network
+  # namespace.
+  docker run -d --name "${SCENARIO}" "${IMAGE}"
+  docker exec "${SCENARIO}" pebble start talker listener
+
+  # Give the nodes a moment to discover each other and exchange messages.
+  sleep 5
+
+  output=$(docker exec "${SCENARIO}" pebble logs talker listener 2>&1)
+  echo "${output}"
+
+  # Verify the talker published and the listener received at least one message.
+  # The C++ talker quotes the message with ' and the Python one with ".
+  echo "${output}" | MATCH "Publishing: ['\"]Hello World:"
+  echo "${output}" | MATCH "I heard: \[Hello World:"
+
+restore: |
+  docker stop "${SCENARIO}" 2>/dev/null || true
+  docker rm "${SCENARIO}" 2>/dev/null || true
+  docker rmi -f "${IMAGE}" 2>/dev/null || true
+  rm -f rockcraft.yaml

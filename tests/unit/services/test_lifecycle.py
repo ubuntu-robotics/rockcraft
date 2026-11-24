@@ -33,10 +33,19 @@ from craft_parts import (
     Step,
     StepInfo,
     callbacks,
+    plugins,
 )
 from craft_parts.state_manager.prime_state import PrimeState
+from rockcraft.plugins.colcon_plugin import ColconPlugin
 from rockcraft.plugins.python_common import get_python_plugins
 from rockcraft.services import lifecycle as lifecycle_module
+
+
+@pytest.fixture
+def colcon_plugin_registered():
+    plugins.register({"colcon": ColconPlugin})
+    yield
+    plugins.unregister("colcon")
 
 
 @pytest.fixture
@@ -319,3 +328,108 @@ def test_usrmerged_by_default(
     assert mock_lifecycle.called
     call = mock_lifecycle.mock_calls[0]
     assert call.kwargs["usrmerged_by_default"] == expected_default
+
+
+def _create_build_step_info(tmp_path, part_name, plugin_name) -> StepInfo:
+    """Create a build StepInfo for a part with the given name and plugin."""
+    dirs = ProjectDirs(work_dir=tmp_path)
+    project_info = ProjectInfo(
+        project_dirs=dirs,
+        application_name="test",
+        cache_dir=tmp_path,
+        strict_mode=False,
+        base="ubuntu@24.04",
+        build_base="ubuntu@24.04",
+    )
+    part = Part(part_name, {"source": ".", "plugin": plugin_name})
+    return StepInfo(
+        part_info=PartInfo(project_info=project_info, part=part), step=Step.BUILD
+    )
+
+
+@pytest.mark.usefixtures("configured_project")
+def test_lifecycle_registers_plugin_post_build_callback(
+    default_image_info, mocker, fake_services
+):
+    """The plugins' post_build hook runs as a PRE_ORGANIZE callback."""
+    mocker.patch.object(
+        fake_services.get("image"), "obtain_image", return_value=default_image_info
+    )
+    mocker.patch.object(LifecycleManager, "__init__", return_value=None)
+    mock_register_step = mocker.patch.object(callbacks, "register_step")
+
+    lifecycle_service = fake_services.get("lifecycle")
+
+    mock_register_step.assert_any_call(
+        lifecycle_service._run_plugin_post_build,
+        step_list=[Step.BUILD],
+        hook_point=callbacks.HookPoint.PRE_ORGANIZE,
+    )
+
+
+@pytest.mark.usefixtures("configured_project")
+@pytest.mark.parametrize(
+    "registered_plugins",
+    [
+        pytest.param({"plain": type("PlainPlugin", (), {})}, id="no-hook"),
+        pytest.param({}, id="unregistered-plugin"),
+    ],
+)
+def test_run_plugin_post_build_without_hook(
+    default_image_info, mocker, fake_services, tmp_path, registered_plugins
+):
+    """Plugins that do not define post_build are skipped."""
+    mocker.patch.object(
+        fake_services.get("image"), "obtain_image", return_value=default_image_info
+    )
+    mocker.patch.object(LifecycleManager, "__init__", return_value=None)
+    mocker.patch.object(
+        lifecycle_module, "get_registered_plugins", return_value=registered_plugins
+    )
+    lifecycle_service = fake_services.get("lifecycle")
+    step_info = _create_build_step_info(tmp_path, "p1", "plain")
+
+    assert lifecycle_service._run_plugin_post_build(step_info) is True
+
+
+@pytest.mark.usefixtures(
+    "colcon_plugin_registered", "configured_project", "project_keys"
+)
+@pytest.mark.parametrize(
+    "project_keys",
+    [
+        {
+            "parts": {
+                "ros-part": {
+                    "plugin": "colcon",
+                    "source": ".",
+                    "colcon-packages": ["demo_nodes_cpp"],
+                }
+            }
+        }
+    ],
+)
+def test_run_plugin_post_build_calls_hook_with_part_properties(
+    default_image_info, mocker, fake_services, tmp_path
+):
+    """The plugin's post_build gets the step info and the part's properties."""
+    mocker.patch.object(
+        fake_services.get("image"), "obtain_image", return_value=default_image_info
+    )
+    mocker.patch.object(LifecycleManager, "__init__", return_value=None)
+    plugin_class = mock.Mock()
+    mocker.patch.object(
+        lifecycle_module,
+        "get_registered_plugins",
+        return_value={"colcon": plugin_class},
+    )
+    lifecycle_service = fake_services.get("lifecycle")
+    step_info = _create_build_step_info(tmp_path, "ros-part", "colcon")
+
+    result = lifecycle_service._run_plugin_post_build(step_info)
+
+    assert result is plugin_class.post_build.return_value
+    plugin_class.post_build.assert_called_once()
+    called_step_info, part_properties = plugin_class.post_build.call_args.args
+    assert called_step_info is step_info
+    assert part_properties["colcon-packages"] == ["demo_nodes_cpp"]

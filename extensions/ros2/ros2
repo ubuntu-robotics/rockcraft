@@ -1,0 +1,41 @@
+#!/bin/sh
+# ROS 2 CLI wrapper injected by the ros2-* Rockcraft extensions.
+#
+# Sources the ROS 2 installation under /opt/ros/ (through ros2-source) and
+# then runs the real ros2 CLI by its absolute path. Running it by name would
+# risk resolving to this very wrapper, recursing forever.
+#
+# Usage: ros2 <ros2 arguments...>
+#   e.g. ros2 run demo_nodes_cpp talker
+
+set -e
+
+_ros2_prefix=""
+# Glob expands in alphabetical order; ROS distros are named alphabetically in
+# release order (Humble < Jazzy < Lyrical < …), so iterating without
+# breaking means _ros2_prefix ends up pointing at the latest installed distro.
+# The workspace overlay is not a distro: skip it.
+for _f in /opt/ros/*/setup.sh; do
+    case "$_f" in
+    /opt/ros/overlay/setup.sh) continue ;;
+    esac
+    # An unmatched glob stays literal; this skips it.
+    if [ -f "$_f" ]; then
+        _ros2_prefix="${_f%/setup.sh}"
+    fi
+done
+unset _f
+
+if [ -z "${_ros2_prefix}" ]; then
+    echo "ros2: no ROS 2 installation found under /opt/ros/" >&2
+    exit 1
+fi
+
+if [ ! -x "${_ros2_prefix}/bin/ros2" ]; then
+    echo "ros2: the ros2 CLI is not installed in this rock" >&2
+    _ros2_distro="$(basename "${_ros2_prefix}")"
+    echo "ros2: add 'ros-${_ros2_distro}-ros2cli' to your stage-packages, or run your executable through ros2-source instead" >&2
+    exit 1
+fi
+
+exec /usr/bin/ros2-source "${_ros2_prefix}/bin/ros2" "$@"

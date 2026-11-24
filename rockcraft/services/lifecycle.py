@@ -22,8 +22,10 @@ from typing import cast
 
 import craft_platforms
 from craft_application import LifecycleService
+from craft_parts import callbacks
 from craft_parts.infos import StepInfo
-from craft_parts.plugins import Plugin
+from craft_parts.plugins import Plugin, get_registered_plugins
+from craft_parts.steps import Step
 from typing_extensions import override
 
 from rockcraft import layers, plugins
@@ -65,6 +67,14 @@ class RockcraftLifecycleService(LifecycleService):
         )
         super().setup()
 
+        # Let plugins run Python code right after their build script, in the
+        # build environment (see ``_run_plugin_post_build``).
+        callbacks.register_step(
+            self._run_plugin_post_build,
+            step_list=[Step.BUILD],
+            hook_point=callbacks.HookPoint.PRE_ORGANIZE,
+        )
+
     @override
     def post_prime(self, step_info: StepInfo) -> bool:
         """Perform base-layer pruning on primed files."""
@@ -80,6 +90,24 @@ class RockcraftLifecycleService(LifecycleService):
         changed |= _python_v2_shebang_fix(step_info)
 
         return changed
+
+    def _run_plugin_post_build(self, step_info: StepInfo) -> bool:
+        """Run the part plugin's ``post_build`` classmethod, if it has one.
+
+        craft-parts plugins only generate shell commands, so a plugin that
+        needs Python code to run after its build script defines a
+        ``post_build(step_info, part_properties) -> bool`` classmethod. The
+        part's properties are passed along, as they are not reachable through
+        ``StepInfo``.
+        """
+        plugin_class = get_registered_plugins().get(step_info.plugin_name)
+        post_build = getattr(plugin_class, "post_build", None)
+        if post_build is None:
+            return True
+
+        project = self._services.get("project").get()
+        part_properties = project.parts.get(step_info.part_name, {})
+        return post_build(step_info, part_properties)
 
     @override
     @staticmethod

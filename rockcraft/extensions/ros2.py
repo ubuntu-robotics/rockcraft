@@ -1,0 +1,254 @@
+# -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
+#
+# Copyright 2026 Canonical Ltd.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Extensions for ROS 2 projects built with the colcon plugin."""
+
+import abc
+from typing import Any
+
+from craft_cli import emit
+from typing_extensions import override
+
+from rockcraft import errors
+
+from .extension import Extension, get_extensions_data_dir, get_project_base
+
+_ROS2_APT_KEY_ID = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
+_ROS2_APT_URL = "http://packages.ros.org/ros2/ubuntu"
+
+
+class _ROS2Base(Extension):
+    """Base class for ROS 2 extensions.
+
+    Each concrete subclass targets one ROS 2 distribution / Ubuntu base pair.
+    The extension automatically:
+
+    * Adds the ROS 2 apt repository to ``package-repositories``.
+    * Injects ``ROS_DISTRO`` into the ``build-environment`` of every user part,
+      so the :ref:`colcon plugin <rockcraft_colcon_plugin>` can source the
+      correct underlay workspace.
+    """
+
+    @property
+    @abc.abstractmethod
+    def distro(self) -> str:
+        """Return the ROS 2 distribution name, e.g. ``'humble'``."""
+
+    @property
+    @abc.abstractmethod
+    def suite(self) -> str:
+        """Return the Ubuntu suite codename, e.g. ``'jammy'``."""
+
+    @classmethod
+    def _expected_base(cls) -> str:
+        """Return the Ubuntu base this extension targets, e.g. ``'ubuntu@22.04'``.
+
+        Derived from :meth:`get_supported_bases`, whose first ``@``-form entry
+        is the targeted base (``bare`` and the deprecated ``ubuntu:X.Y`` alias
+        are skipped).
+        """
+        return next(b for b in cls.get_supported_bases() if "@" in b)
+
+    @override
+    def _validate_extras(self) -> None:
+        """Check that the effective build base is the extension's base.
+
+        The ROS 2 apt repository targets one Ubuntu suite, so the build
+        environment must run that suite, whatever the ``base`` is. The build
+        environment comes from ``build-base``, which defaults to ``base`` when
+        it is unset (and ``base`` is not ``bare``).
+        """
+        expected_base = self._expected_base()
+        if get_project_base(self.yaml_data) == expected_base:
+            return
+
+        build_base: str | None = self.yaml_data.get("build-base")
+        raise errors.ExtensionError(
+            f"Extension {self.extension_name!r} targets {expected_base!r} "
+            f"(ROS 2 {self.distro} on the {self.suite!r} suite), but the project "
+            + (
+                f"sets build-base {build_base!r}."
+                if build_base
+                else "does not set a build-base."
+            ),
+            resolution=(
+                f"Set 'build-base: {expected_base}' so the ROS 2 apt "
+                "repository matches the build environment."
+            ),
+        )
+
+    @staticmethod
+    @override
+    def is_experimental(base: str | None) -> bool:
+        """Check if the extension is in an experimental state.
+
+        The ROS 2 extensions are experimental while the colcon plugin and the
+        launcher mechanism stabilise, so their behaviour may still change.
+        """
+        return True
+
+    @override
+    def get_root_snippet(self) -> dict[str, Any]:
+        """Return the root snippet to apply.
+
+        Adds the ROS 2 apt repository for the correct Ubuntu suite.
+        """
+        # The ros2 wrapper is an implicit runtime contract: ROS 2 service and
+        # entrypoint commands must be run through it (or ros2-source) so the
+        # ROS 2 underlay is sourced. Surface that here so the requirement is
+        # not invisible.
+        emit.progress(
+            f"ros2-{self.distro}: run ROS 2 service and entrypoint commands "
+            "through the injected wrappers so the ROS 2 environment is "
+            'sourced at runtime, e.g. "command: ros2 run <package> <executable>" '
+            "(use 'ros2-source <command>' for executables that are not ros2 "
+            "CLI invocations).",
+            permanent=True,
+        )
+        return {
+            "package-repositories": [
+                {
+                    "type": "apt",
+                    "url": _ROS2_APT_URL,
+                    "components": ["main"],
+                    "suites": [self.suite],
+                    "key-id": _ROS2_APT_KEY_ID,
+                }
+            ],
+        }
+
+    @override
+    def get_part_snippet(self) -> dict[str, Any]:
+        """Return the part snippet to apply to every existing part.
+
+        Injects ``ROS_DISTRO`` into the part's ``build-environment`` so the
+        colcon plugin sources the correct ROS 2 underlay.
+        """
+        return {
+            "build-environment": [{"ROS_DISTRO": self.distro}],
+        }
+
+    @override
+    def get_parts_snippet(self) -> dict[str, Any]:
+        """Return the launcher part for the ROS 2 workspace.
+
+        Injects two wrapper scripts that source the ROS 2 underlay in
+        ``/opt/ros/<distro>`` and then the workspace overlay in
+        ``/opt/ros/overlay`` (installed by the colcon plugin, if present)
+        before exec-ing the user command:
+
+        - ``ros2`` (installed to ``/usr/bin/ros2``) then runs the real ``ros2``
+          CLI by absolute path, so service and entrypoint commands read
+          naturally, e.g. ``command: ros2 run <package> <node>``.
+        - ``ros2-source`` (installed to ``/usr/bin/ros2-source``) runs any
+          other command with the ROS 2 environment sourced. It also works
+          with only the overlay, when no underlay is staged.
+
+
+        The part is named ``<extension-name><sep>launch``, where the separator
+        depends on the base (see :meth:`Extension.get_part_name`).
+        """
+        return {
+            self.get_part_name("launch"): {
+                "plugin": "dump",
+                "source": str(get_extensions_data_dir() / "ros2"),
+                "organize": {
+                    "ros2": "usr/bin/ros2",
+                    "ros2-source": "usr/bin/ros2-source",
+                },
+                "stage": ["usr/bin/ros2", "usr/bin/ros2-source"],
+            },
+        }
+
+
+class ROS2HumbleExtension(_ROS2Base):
+    """Extension for ROS 2 Humble Hawksbill on ubuntu@22.04."""
+
+    @staticmethod
+    @override
+    def get_supported_bases() -> tuple[str, ...]:
+        """Return supported bases."""
+        return ("bare", "ubuntu@22.04", "ubuntu:22.04")
+
+    @property
+    @override
+    def distro(self) -> str:
+        return "humble"
+
+    @property
+    @override
+    def suite(self) -> str:
+        return "jammy"
+
+
+class ROS2JazzyExtension(_ROS2Base):
+    """Extension for ROS 2 Jazzy Jalisco on ubuntu@24.04."""
+
+    @staticmethod
+    @override
+    def get_supported_bases() -> tuple[str, ...]:
+        """Return supported bases."""
+        return ("bare", "ubuntu@24.04", "ubuntu:24.04")
+
+    @property
+    @override
+    def distro(self) -> str:
+        return "jazzy"
+
+    @property
+    @override
+    def suite(self) -> str:
+        return "noble"
+
+
+class ROS2LyricalExtension(_ROS2Base):
+    """Extension for ROS 2 Lyrical Luth on ubuntu@26.04."""
+
+    @staticmethod
+    @override
+    def get_supported_bases() -> tuple[str, ...]:
+        """Return supported bases."""
+        return ("bare", "ubuntu@26.04", "ubuntu:26.04")
+
+    @property
+    @override
+    def distro(self) -> str:
+        return "lyrical"
+
+    @property
+    @override
+    def suite(self) -> str:
+        return "resolute"
+
+
+class ROS2FoxyExtension(_ROS2Base):
+    """Extension for ROS 2 Foxy Fitzroy on ubuntu@20.04."""
+
+    @staticmethod
+    @override
+    def get_supported_bases() -> tuple[str, ...]:
+        """Return supported bases."""
+        return ("bare", "ubuntu@20.04", "ubuntu:20.04")
+
+    @property
+    @override
+    def distro(self) -> str:
+        return "foxy"
+
+    @property
+    @override
+    def suite(self) -> str:
+        return "focal"
