@@ -27,18 +27,22 @@ environment right after the colcon build installed the workspace.
 
 The ``exec_depends`` declared in the workspace's ``package.xml`` files are
 resolved to apt packages with rosdep, fetched as stage packages (together with
-their transitive apt dependencies) and unpacked into the part's install
-directory so they are primed into the rock.
+their transitive apt dependencies) and merged into the part's install
+directory, without overwriting what is already there, so they are primed into
+the rock. Only these packages are normalized (see
+:func:`craft_parts.packages.normalize.normalize`), not what the build installed.
 """
 
 import logging
 import pathlib
 import re
 import subprocess
+import tempfile
 
 from catkin_pkg import packages as catkin_packages
 from craft_parts.infos import StepInfo
 from craft_parts.packages import Repository
+from craft_parts.utils import file_utils
 
 from rockcraft.errors import RockcraftError
 
@@ -162,6 +166,7 @@ def _resolve_apt_dependencies(
     are processed (mirrors the ``colcon-packages`` selection used at build
     time). Packages listed in *colcon_packages_ignore* are never processed
     (mirrors ``colcon-packages-ignore``).
+
     """
     apt_packages: set[str] = set()
 
@@ -244,6 +249,43 @@ def _resolve_apt_dependencies(
     return apt_packages
 
 
+def _get_unpacked_stage_packages(part_install: pathlib.Path) -> set[str]:
+    """Return the names of the packages craft-parts already unpacked for the part.
+
+    The debs of the part's own ``stage-packages``, with their dependencies, are
+    kept in the part's ``stage_packages`` directory and were unpacked into the
+    install directory at the start of the build.
+    """
+    stage_packages_dir = part_install.parent / "stage_packages"
+    # apt names the archives <package>_<version>_<arch>.deb
+    return {deb.name.split("_", 1)[0] for deb in stage_packages_dir.glob("*.deb")}
+
+
+def _merge_without_overwriting(source: pathlib.Path, destination: pathlib.Path) -> None:
+    """Merge the *source* tree into *destination*, keeping what already exists.
+
+    Directories are merged, and so is their metadata: the existing ones keep
+    theirs. A file or symlink of *source* is skipped if *destination* already
+    has an entry at that path.
+    """
+
+    def ignore_existing(directory: str, names: list[str]) -> list[str]:
+        destination_dir = destination / pathlib.Path(directory).relative_to(source)
+        ignored = []
+        for name in names:
+            entry = pathlib.Path(directory, name)
+            if entry.is_dir() and not entry.is_symlink():
+                continue
+            target = destination_dir / name
+            if target.is_symlink() or target.exists():
+                ignored.append(name)
+        return ignored
+
+    file_utils.link_or_copy_tree(
+        source, destination, ignore=ignore_existing, overwrite_metadata=False
+    )
+
+
 def stage_runtime_dependencies(  # noqa: PLR0913 (too many arguments)
     *,
     part_src: str,
@@ -274,23 +316,47 @@ def stage_runtime_dependencies(  # noqa: PLR0913 (too many arguments)
 
     package_names = sorted(apt_packages)
     install_path = pathlib.Path(part_install)
-    stage_packages_path = install_path.parent / "stage_packages"
 
     Repository.configure("rockcraft")
 
-    logger.info("Fetching stage packages: %r", package_names)
-    fetched_stage_packages = Repository.fetch_stage_packages(
-        cache_dir=pathlib.Path(stage_cache_dir),
-        package_names=package_names,
-        arch=target_arch,
-        base=base,
-        stage_packages_path=stage_packages_path,
-    )
+    # The pull-owned stage_packages directory of the part is not reused: it
+    # outlives a build clean and is unpacked again at the start of every build,
+    # so stale runtime packages would come back. The downloads are cached in
+    # stage_cache_dir, so this directory only holds links to them.
+    #
+    # The packages are unpacked in a scratch directory first, as unpacking
+    # normalizes the files (shebangs, absolute symlinks, ...): that must not
+    # alter what the build installed. They are then merged into the install
+    # directory without overwriting what is already there.
+    with (
+        tempfile.TemporaryDirectory(
+            suffix="ros-runtime-debs", dir=install_path.parent
+        ) as runtime_debs,
+        tempfile.TemporaryDirectory(
+            suffix="ros-runtime-unpack", dir=install_path.parent
+        ) as runtime_unpack,
+    ):
+        stage_packages_path = pathlib.Path(runtime_debs)
+        unpack_path = pathlib.Path(runtime_unpack)
 
-    logger.info("Unpacking stage packages: %r", fetched_stage_packages)
-    Repository.unpack_stage_packages(
-        stage_packages_path=stage_packages_path, install_path=install_path
-    )
+        logger.info("Fetching stage packages: %r", package_names)
+        fetched_stage_packages = Repository.fetch_stage_packages(
+            cache_dir=pathlib.Path(stage_cache_dir),
+            package_names=package_names,
+            arch=target_arch,
+            base=base,
+            stage_packages_path=stage_packages_path,
+            # Do not unpack again over the install directory what the part's own
+            # stage-packages already provide, as that would overwrite the edits
+            # of an override-build. Only the deb repository supports the filter.
+            packages_filters=_get_unpacked_stage_packages(install_path),  # ty: ignore[unknown-argument]
+        )
+
+        logger.info("Unpacking stage packages: %r", fetched_stage_packages)
+        Repository.unpack_stage_packages(
+            stage_packages_path=stage_packages_path, install_path=unpack_path
+        )
+        _merge_without_overwriting(unpack_path, install_path)
 
 
 def stage_runtime_dependencies_callback(

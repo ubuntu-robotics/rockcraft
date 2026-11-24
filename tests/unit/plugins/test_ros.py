@@ -342,13 +342,37 @@ def test_stage_runtime_dependencies_fetches_and_unpacks(monkeypatch, tmp_path):
         mock.Mock(return_value={"ros-humble-rclcpp", "libfoo"}),
     )
     configure = mock.Mock()
-    fetch = mock.Mock(return_value=["ros-humble-rclcpp", "libfoo"])
-    unpack = mock.Mock()
+    seen = {}
+
+    def fake_fetch(**kwargs):
+        seen["fetch_dir"] = kwargs["stage_packages_path"]
+        seen["fetch_dir_existed"] = kwargs["stage_packages_path"].is_dir()
+        return ["ros-humble-rclcpp", "libfoo"]
+
+    def fake_unpack(**kwargs):
+        seen["unpack_debs"] = kwargs["stage_packages_path"]
+        seen["unpack_dir"] = kwargs["install_path"]
+        seen["unpack_dir_existed"] = kwargs["install_path"].is_dir()
+        # Unpacking (and the normalization it does) happens in the scratch
+        # directory: the install directory is untouched at this point.
+        seen["install_untouched"] = not (install_path / "new.txt").exists()
+        (kwargs["install_path"] / "new.txt").write_text("from the runtime deb")
+        (kwargs["install_path"] / "existing.txt").write_text("from the runtime deb")
+
+    fetch = mock.Mock(side_effect=fake_fetch)
+    unpack = mock.Mock(side_effect=fake_unpack)
     monkeypatch.setattr(_ros.Repository, "configure", configure)
     monkeypatch.setattr(_ros.Repository, "fetch_stage_packages", fetch)
     monkeypatch.setattr(_ros.Repository, "unpack_stage_packages", unpack)
 
     install_path = tmp_path / "install"
+    install_path.mkdir()
+    (install_path / "existing.txt").write_text("from the build")
+    # Packages that the part's own stage-packages already unpacked.
+    pull_owned_debs = tmp_path / "stage_packages"
+    pull_owned_debs.mkdir()
+    for deb in ("libfoo_1%3a2.0-1_amd64.deb", "ros-humble-std-msgs_5.3.5-1_amd64.deb"):
+        (pull_owned_debs / deb).touch()
 
     _ros.stage_runtime_dependencies(
         part_src=str(tmp_path / "src"),
@@ -367,10 +391,125 @@ def test_stage_runtime_dependencies_fetches_and_unpacks(monkeypatch, tmp_path):
     assert kwargs["package_names"] == ["libfoo", "ros-humble-rclcpp"]
     assert kwargs["arch"] == "amd64"
     assert kwargs["base"] == "ubuntu@22.04"
-    assert kwargs["stage_packages_path"] == tmp_path / "stage_packages"
+    # What is already unpacked is not fetched again.
+    assert kwargs["packages_filters"] == {"libfoo", "ros-humble-std-msgs"}
     unpack.assert_called_once_with(
-        stage_packages_path=tmp_path / "stage_packages", install_path=install_path
+        stage_packages_path=seen["fetch_dir"], install_path=seen["unpack_dir"]
     )
+    # The packages go through scratch directories next to the install dir, not
+    # through the part's own (pull-owned) stage_packages directory...
+    assert seen["fetch_dir"].parent == tmp_path
+    assert seen["fetch_dir"] != tmp_path / "stage_packages"
+    assert seen["fetch_dir_existed"]
+    assert seen["unpack_dir"].parent == tmp_path
+    assert seen["unpack_dir"] != install_path
+    assert seen["unpack_dir_existed"]
+    assert seen["install_untouched"]
+    # ...and they are gone afterwards, so nothing stale outlives the hook.
+    assert not seen["fetch_dir"].exists()
+    assert not seen["unpack_dir"].exists()
+    # The unpacked files are merged without overwriting what the build made.
+    assert (install_path / "new.txt").read_text() == "from the runtime deb"
+    assert (install_path / "existing.txt").read_text() == "from the build"
+
+
+def test_stage_runtime_dependencies_cleans_up_on_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        _ros, "_resolve_apt_dependencies", mock.Mock(return_value={"libfoo"})
+    )
+    monkeypatch.setattr(_ros.Repository, "configure", mock.Mock())
+    seen = {}
+
+    def fake_fetch(**kwargs):
+        seen["dir"] = kwargs["stage_packages_path"]
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(
+        _ros.Repository, "fetch_stage_packages", mock.Mock(side_effect=fake_fetch)
+    )
+    install_path = tmp_path / "install"
+    install_path.mkdir()
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        _ros.stage_runtime_dependencies(
+            part_src=str(tmp_path / "src"),
+            part_install=str(install_path),
+            ros_version="2",
+            ros_distro="humble",
+            target_arch="amd64",
+            stage_cache_dir=str(tmp_path / "cache"),
+            base="ubuntu@22.04",
+        )
+
+    assert not seen["dir"].exists()
+    assert not list(tmp_path.glob("*ros-runtime-*"))
+
+
+def test_merge_without_overwriting_keeps_existing_entries(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "a" / "deep").mkdir(parents=True)
+    (destination / "a").mkdir(parents=True)
+    (destination / "a").chmod(0o750)
+
+    (source / "a" / "existing.txt").write_text("new")
+    (source / "a" / "new.txt").write_text("new")
+    (source / "a" / "deep" / "nested.txt").write_text("new")
+    (source / "link").symlink_to("a/new.txt")
+    (source / "existing-link").symlink_to("a/new.txt")
+    (destination / "a" / "existing.txt").write_text("original")
+    (destination / "existing-link").symlink_to("original-target")
+
+    _ros._merge_without_overwriting(source, destination)
+
+    # What is already there is kept, even a symlink to nothing...
+    assert (destination / "a" / "existing.txt").read_text() == "original"
+    assert (destination / "existing-link").readlink() == pathlib.Path("original-target")
+    # ...the rest is merged in...
+    assert (destination / "a" / "new.txt").read_text() == "new"
+    assert (destination / "a" / "deep" / "nested.txt").read_text() == "new"
+    assert (destination / "link").readlink() == pathlib.Path("a/new.txt")
+    # ...and the existing directories keep their metadata.
+    assert (destination / "a").stat().st_mode & 0o777 == 0o750
+
+
+def test_merge_without_overwriting_through_directory_symlinks(tmp_path):
+    # e.g. the lib -> usr/lib symlink of a usrmerged install directory.
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "lib").mkdir(parents=True)
+    (source / "lib" / "libfoo.so").write_text("lib")
+    (destination / "usr" / "lib").mkdir(parents=True)
+    (destination / "lib").symlink_to("usr/lib")
+
+    _ros._merge_without_overwriting(source, destination)
+
+    assert (destination / "usr" / "lib" / "libfoo.so").read_text() == "lib"
+    assert (destination / "lib").is_symlink()
+
+
+def test_get_unpacked_stage_packages(tmp_path):
+    install_path = tmp_path / "install"
+    stage_packages = tmp_path / "stage_packages"
+    stage_packages.mkdir()
+    for name in (
+        "libc6_2.40-1ubuntu1_amd64.deb",
+        "libfoo_1%3a2.0-1_amd64.deb",
+        "ros-humble-rclcpp_16.0.1-1_amd64.deb",
+        "not-a-package.txt",
+    ):
+        (stage_packages / name).touch()
+
+    assert _ros._get_unpacked_stage_packages(install_path) == {
+        "libc6",
+        "libfoo",
+        "ros-humble-rclcpp",
+    }
+
+
+def test_get_unpacked_stage_packages_without_stage_packages(tmp_path):
+    # Parts without stage-packages have no (pull-owned) stage_packages dir.
+    assert _ros._get_unpacked_stage_packages(tmp_path / "install") == set()
 
 
 def test_stage_runtime_dependencies_no_packages(monkeypatch, tmp_path):
